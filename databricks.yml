@@ -1,0 +1,153 @@
+# Databricks Asset Bundle: the jobs (and an optional declarative pipeline) as code.
+# Deploy:  databricks bundle deploy -t dev
+# Run:     databricks bundle run lakehouse_daily -t dev -- --run_date=2026-09-03
+# See docs/RUNBOOK.md. This is a bundle, not Terraform.
+
+bundle:
+  name: databricks-lakehouse-lab
+
+variables:
+  catalog:
+    description: Unity Catalog catalog. Free Edition has "workspace"; use it if CREATE CATALOG is blocked.
+    default: workspace
+  schema_prefix:
+    description: Prefix for the bronze/silver/gold/ops schemas.
+    default: lakehouse_
+  ingest_mode:
+    description: autoloader, or batch if the Day 0 probe shows streaming is unavailable.
+    default: autoloader
+  failure_email:
+    description: Who gets the failure email.
+    default: ${workspace.current_user.userName}
+
+resources:
+  jobs:
+    lakehouse_daily:
+      name: lakehouse-daily
+      description: verify_manifest -> bronze -> silver -> gold -> docs_and_tags -> dq_report
+      max_concurrent_runs: 1
+      parameters:
+        - name: run_date
+          default: ""
+      email_notifications:
+        on_failure:
+          - ${var.failure_email}
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "2"
+      tasks:
+        # Deterministic checks get no retries: re-running a hash mismatch or a
+        # failed quality gate only delays the alert.
+        - task_key: verify_manifest
+          environment_key: default
+          max_retries: 0
+          spark_python_task:
+            python_file: ./jobs/verify_manifest.py
+            # Shared by every task (YAML anchor). --src-root lets jobs/*.py
+            # import src/lakehouse from the synced bundle files, so no wheel
+            # has to be built or cached.
+            parameters: &task_args
+              - "--catalog=${var.catalog}"
+              - "--schema-prefix=${var.schema_prefix}"
+              - "--ingest-mode=${var.ingest_mode}"
+              - "--run-date={{job.parameters.run_date}}"
+              - "--run-id={{job.run_id}}"
+              - "--src-root=${workspace.file_path}/src"
+
+        - task_key: bronze
+          depends_on: [{ task_key: verify_manifest }]
+          environment_key: default
+          max_retries: 2
+          min_retry_interval_millis: 60000
+          spark_python_task:
+            python_file: ./jobs/bronze.py
+            parameters: *task_args
+
+        - task_key: silver
+          depends_on: [{ task_key: bronze }]
+          environment_key: default
+          max_retries: 2
+          min_retry_interval_millis: 60000
+          spark_python_task:
+            python_file: ./jobs/silver.py
+            parameters: *task_args
+
+        - task_key: gold
+          depends_on: [{ task_key: silver }]
+          environment_key: default
+          max_retries: 2
+          min_retry_interval_millis: 60000
+          spark_python_task:
+            python_file: ./jobs/gold.py
+            parameters: *task_args
+
+        - task_key: docs_and_tags
+          depends_on: [{ task_key: gold }]
+          environment_key: default
+          max_retries: 2
+          min_retry_interval_millis: 60000
+          spark_python_task:
+            python_file: ./jobs/docs_and_tags.py
+            parameters: *task_args
+
+        - task_key: dq_report
+          depends_on: [{ task_key: docs_and_tags }]
+          environment_key: default
+          max_retries: 0
+          spark_python_task:
+            python_file: ./jobs/dq_report.py
+            parameters: *task_args
+
+    lakehouse_setup:
+      name: lakehouse-setup
+      description: One-time - create the schemas and the landing/state volumes.
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "2"
+      tasks:
+        - task_key: setup
+          environment_key: default
+          spark_python_task:
+            python_file: ./jobs/setup.py
+            parameters: *task_args
+
+    lakehouse_delta_evidence:
+      name: lakehouse-delta-evidence
+      description: Manual - time travel, schema enforcement and evolution, OPTIMIZE and VACUUM on the built tables.
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "2"
+      tasks:
+        - task_key: delta_evidence
+          environment_key: default
+          spark_python_task:
+            python_file: ./jobs/delta_evidence.py
+            parameters: *task_args
+
+targets:
+  dev:
+    mode: development
+    default: true
+
+  # Same as dev plus the declarative-pipeline version of the quality rules.
+  # Separate because Free Edition allows one active pipeline per type and the
+  # Day 0 probe has to confirm pipelines run before anything depends on them.
+  dev_pipeline:
+    mode: development
+    resources:
+      pipelines:
+        lakehouse_dq_expectations:
+          name: lakehouse-dq-expectations
+          catalog: ${var.catalog}
+          schema: ${var.schema_prefix}ops
+          serverless: true
+          libraries:
+            - file:
+                path: ./pipelines/dq_expectations.py
+          configuration:
+            lakehouse.catalog: ${var.catalog}
+            lakehouse.schema_prefix: ${var.schema_prefix}
+            lakehouse.src_root: ${workspace.file_path}/src

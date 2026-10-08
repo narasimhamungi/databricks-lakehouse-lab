@@ -1,0 +1,100 @@
+"""Turn the run reports the pipeline wrote into the README's Results tables.
+
+Download the reports from the volume first:
+
+    databricks fs cp -r dbfs:/Volumes/workspace/lakehouse_ops/state/reports ./outputs/reports
+
+then:
+
+    python scripts/render_results.py ./outputs/reports > outputs/results.md
+
+Every number in the output comes from a report file. Nothing is typed by hand,
+so the README cannot drift from what actually ran.
+"""
+
+from __future__ import annotations
+
+import glob
+import json
+import os
+import sys
+
+
+def _load(paths: list[str]) -> list[dict]:
+    out = []
+    for p in sorted(paths):
+        with open(p, encoding="utf-8") as fh:
+            out.append(json.load(fh))
+    return out
+
+
+def _row(task_rows: list[dict], task: str, table_suffix: str) -> dict | None:
+    for r in task_rows:
+        if r["task"] == task and str(r["table_name"]).endswith(table_suffix):
+            return r
+    return None
+
+
+def _iu(r: dict | None) -> str:
+    return f"{r['inserted']} / {r['updated']}" if r else "-"
+
+
+def render(report_dir: str) -> str:
+    runs = [r for r in _load(glob.glob(os.path.join(report_dir, "dq_report_*.json"))) if r.get("run_date")]
+    runs.sort(key=lambda r: r["run_date"])
+    lines = ["### Drop-by-drop loads", ""]
+    lines.append(
+        "| Drop | Bronze rows added (yfinance) | Silver yfinance inserted / updated | "
+        "Silver Tiingo inserted / updated | Quarantined rows | Gates failed | Parity |"
+    )
+    lines.append("|---|---|---|---|---|---|---|")
+    for r in runs:
+        t = r.get("tasks", [])
+        b = _row(t, "bronze", ".yfinance_prices")
+        sy = _row(t, "silver", ".prices_yfinance")
+        st = _row(t, "silver", ".prices_tiingo")
+        q = sum(r.get("quarantine", {}).values())
+        lines.append(
+            f"| {r['run_date']} | {b['inserted'] if b else '-'} | {_iu(sy)} | {_iu(st)} | {q} | "
+            f"{len(r['gates_failed'])} | {r['parity']['status']} |"
+        )
+
+    final = runs[-1] if runs else None
+    if final and final.get("reconciliation"):
+        rec = final["reconciliation"]
+        lines += [
+            "",
+            "### Reconciliation (full snapshot)",
+            "",
+            "| | Port (Spark) | Original (pandas) |",
+            "|---|---|---|",
+        ]
+        ref = final["parity"].get("reference", {})
+        for k in ("compared", "flagged", "yfinance_only", "tiingo_only"):
+            original = f"{ref[k]:,}" if k in ref else "-"
+            lines.append(f"| {k} | {rec[k]:,} | {original} |")
+        lines.append(f"\nParity: **{final['parity']['status']}**.")
+
+    ev_path = os.path.join(report_dir, "delta_evidence.json")
+    if os.path.isfile(ev_path):
+        ev = _load([ev_path])[0]
+        opt = ev["optimize"]
+        lines += [
+            "",
+            "### Delta Lake evidence",
+            "",
+            f"- Time travel: row count by version of silver yfinance {ev['time_travel']}.",
+            f"- Schema enforcement: mismatched append rejected = {ev['schema_enforcement']['rejected']}.",
+            f"- Schema evolution: columns after mergeSchema append {ev['schema_evolution']['columns_after']}.",
+            f"- OPTIMIZE on {opt['table']}: {opt['files_before']} files -> {opt['files_after']}. "
+            f"Query seconds before {opt['query_seconds_before']}, after {opt['query_seconds_after']} "
+            f"({opt['note']}).",
+            f"- VACUUM: {ev.get('vacuum')}.",
+        ]
+    return "\n".join(lines) + "\n"
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        sys.exit("usage: render_results.py <reports-dir>")
+    sys.stdout.write(render(sys.argv[1]))

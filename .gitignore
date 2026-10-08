@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+spark-warehouse/
+metastore_db/
+derby.log
+.databricks/
+# Exported snapshot data is uploaded to a Unity Catalog volume, never committed.
+landing/
+outputs/local/
+.env

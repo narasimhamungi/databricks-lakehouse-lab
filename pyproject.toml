@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "databricks-lakehouse-lab"
+version = "0.1.0"
+description = "Bronze/silver/gold equities lakehouse on Databricks: PySpark, Delta Lake MERGE, SCD-2, Workflows, Unity Catalog."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Narasimha Mungi" }]
+# pyspark is not a runtime dependency: Databricks provides it, and pinning it
+# here would fight the runtime's own Spark. Local work uses the dev extra.
+dependencies = ["pyarrow>=14"]
+
+[project.optional-dependencies]
+dev = [
+  "pyspark==4.0.1",
+  "delta-spark==4.0.0",
+  "pandas>=2.2",
+  "pyyaml>=6",
+  "pytest>=8",
+  "ruff>=0.6",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "delta: needs the Delta Lake jars (MERGE, history, time travel). Skipped when they cannot load, unless REQUIRE_DELTA=1.",
+]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Databricks notebooks get `spark` and `dbutils` from the runtime.
+"notebooks/*" = ["F821", "E402"]
