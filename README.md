@@ -15,14 +15,23 @@ reconciliation exactly: 63,575 compared, 1,262 flagged, 635,830 yfinance-only, 1
 |---|---|
 | Code, tests, bundle, Day 0 probe | Built |
 | Tests | 88 (77 on plain Spark, 11 on Delta Lake) |
-| Local run on real data | Done: parity with the original pipeline matches (below) |
+| Local run on real data | Done, drop by drop: parity with the original pipeline matches; 11 Delta tests pass |
 | Databricks run | **Not yet run.** The Platform section and the Databricks results are filled from that run, not estimated |
 
 ## Results
 
 ### Local run on real data
 
-Local Spark 4.0.1 with Delta Lake 4.0.0 (Docker), the full snapshot in one run.
+Local Spark 4.0.1 with Delta Lake 4.0.0 in Docker, 2026-10-09. The four drops were loaded one at a time, then the workflow ran once more with nothing new (`scripts/run_local.py`). The tables below are `scripts/render_results.py` output.
+
+| Drop | Bronze rows added (yfinance) | Silver yfinance inserted / updated | Silver Tiingo inserted / updated | dim_security new / changed / closed | Quarantined rows | Gates failed | Parity |
+|---|---|---|---|---|---|---|---|
+| 2026-09-04 | 698,665 | 698,665 / 0 | 78,852 / 0 | 503 / 0 / 0 | 1 | 0 | pending |
+| 2026-09-08 | 370 | 370 / 0 | 42 / 0 | - | 0 | 0 | pending |
+| 2026-09-09 | 740 | 370 / 0 | 42 / 0 | - | 0 | 0 | match |
+| 2026-10-07 | 0 | 0 / 0 | 0 / 0 | 6 / 0 / 6 | 0 | 0 | match |
+
+Run `rerun` with no new drop: 0 rows inserted and 0 updated across 14 table writes; 0 gates failed; parity match.
 
 | Reconciliation | Spark port | Original pipeline (pandas, 2026-09-08 report) |
 |---|---|---|
@@ -31,12 +40,13 @@ Local Spark 4.0.1 with Delta Lake 4.0.0 (Docker), the full snapshot in one run.
 | yfinance only | 635,830 | 635,830 |
 | Tiingo only | 15,361 | 15,361 |
 
-- **Silver:** 699,405 yfinance rows (370 tickers) and 78,936 Tiingo rows (42 tickers).
-- **Overlap day:** the day re-sent in the last drop was removed exactly once: 370 yfinance, 42 Tiingo and 2 FRED rows.
-- **Gold:** 778,341 rows in `fact_price_daily`, every one with a security and a date key, and 714,766 in `fact_price_daily_consensus`.
-- **Quality:** 36 gates, 0 failed. One row was quarantined as a warning and kept in silver: HUBB on 2021-05-05, where the low (196.21) is above the open (195.98). This is the vendor bad print the original pipeline documented.
+Parity is `pending` until the 2026-09-09 drop because the reference report covers the whole snapshot.
 
-The drop-by-drop table (incremental loads, SCD-2 on the 2026-10-07 snapshot, idle re-run) is produced by `scripts/run_local.py` and `scripts/render_results.py`; see docs/RUNBOOK.md.
+- **Incremental and idempotent.** The 2026-09-09 drop re-sent 2026-09-08: 740 rows reached bronze, silver inserted only the 370 new ones and updated none. The final re-run wrote nothing.
+- **SCD-2 on a real index change.** The 2026-10-07 snapshot closed 6 securities, opened 6 and left 497 unchanged. The fact reload after it inserted 0 rows and left 0 rows without a security key, so the removed tickers' history kept its keys. The calendar stayed at 2026-09-09.
+- **Gold:** 778,341 rows in `fact_price_daily` and 714,766 in `fact_price_daily_consensus`, every one with a security and a date key.
+- **Silver:** 699,405 yfinance rows (370 tickers) and 78,936 Tiingo rows (42 tickers).
+- **Quality:** 36 gates on the first drop, 0 failed in any run. One row was quarantined as a warning and kept in silver: HUBB on 2021-05-05, where the low (196.21) is above the open (195.98). This is the vendor bad print the original pipeline documented.
 
 ## Why this exists
 
