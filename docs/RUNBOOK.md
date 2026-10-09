@@ -68,7 +68,7 @@ Databricks quota. Run it in PowerShell with Docker Desktop open:
 docker run --rm -e SPARK_DRIVER_MEMORY=3g `
   -v "N:\AAA Projects\Financial projects\databricks-lakehouse-lab:/repo" -w /work python:3.12-slim-bookworm `
   bash -c "apt-get update -qq && apt-get install -y -qq openjdk-17-jre-headless procps > /dev/null && pip install -q -e '/repo[dev]' && python /repo/scripts/run_local.py --staging /repo/landing --root /work; mkdir -p /repo/outputs/local && rm -rf /repo/outputs/local/reports && cp -r /work/state/reports /repo/outputs/local/"
-python scripts\render_results.py outputs\local\reports > outputs\local\results.md
+python scripts\render_results.py outputs\local\reports | Out-File -Encoding utf8 outputs\local\results.md
 ```
 
 Expect one run per drop, then a re-run that writes nothing, and `parity match` from the
@@ -151,7 +151,7 @@ showing pass and fail counts. Free Edition allows one active pipeline per type, 
 
 ```powershell
 databricks fs cp -r dbfs:/Volumes/workspace/lakehouse_ops/state/reports .\outputs\reports
-python scripts/render_results.py .\outputs\reports > .\outputs\results.md
+python scripts\render_results.py .\outputs\reports | Out-File -Encoding utf8 .\outputs\results.md
 ```
 
 Paste `results.md` into the README's Results section and the probe table into Platform.
