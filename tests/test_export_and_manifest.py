@@ -146,3 +146,28 @@ def test_reference_file_written(exported):
         ref = json.load(fh)
     assert ref["compared"] == factory.expected_reconciliation()["compared"]
     assert ref["tolerance"] == 0.005
+
+
+def test_extra_constituents_snapshot_becomes_its_own_drop(tmp_path):
+    mdl = str(tmp_path / "mdl")
+    bronze = factory.write_mdl_bronze(mdl)
+    factory.write_constituents_partition(mdl, factory.LATER_SNAPSHOT, factory.later_constituents_frame())
+    landing = str(tmp_path / "landing")
+    summary = export.export_snapshot(bronze, factory.INGEST_DATE, landing, extra_constituents=[factory.LATER_SNAPSHOT])
+    assert summary["extra_constituent_drops"] == [factory.LATER_SNAPSHOT]
+    assert summary["rows_by_drop"][factory.LATER_SNAPSHOT] == 3
+    reports = manifest.verify_landing(landing)
+    assert [r.drop_date for r in reports][-1] == factory.LATER_SNAPSHOT and all(r.ok for r in reports)
+    only = os.listdir(os.path.join(landing, "constituents"))
+    assert f"drop_date={factory.LATER_SNAPSHOT}" in only
+    assert not os.path.isdir(os.path.join(landing, "yfinance_prices", f"drop_date={factory.LATER_SNAPSHOT}"))
+
+
+def test_extra_snapshot_must_follow_the_price_drops_and_exist(tmp_path):
+    mdl = str(tmp_path / "mdl")
+    bronze = factory.write_mdl_bronze(mdl)
+    factory.write_constituents_partition(mdl, "2024-01-10", factory.later_constituents_frame("2024-01-10"))
+    with pytest.raises(export.ExportError, match="must be later"):
+        export.export_snapshot(bronze, factory.INGEST_DATE, str(tmp_path / "a"), extra_constituents=["2024-01-10"])
+    with pytest.raises(export.ExportError, match="No constituents bronze"):
+        export.export_snapshot(bronze, factory.INGEST_DATE, str(tmp_path / "b"), extra_constituents=["2024-02-01"])

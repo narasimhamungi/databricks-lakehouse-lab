@@ -10,18 +10,19 @@ Ported as-is:
 - fact_price_daily keeps both vendors at (security, date, source) grain.
 - fact_price_daily_consensus: symmetric adj_close difference against the
   average of the two sources, 0.5% tolerance, yfinance preferred because it
-  covers the full universe and Tiingo is a sample.
-- Facts key on the *current* dim_security row, as the original's loaders do.
+  has the wider coverage and Tiingo is a sample.
 
 Changed on purpose:
 - security_key is xxhash64(ticker, effective_from) rather than a SERIAL. A
   deterministic key means rebuilding the dimension gives the same keys, and
   no sequence state has to survive between runs.
+- Facts key to the dim_security version in effect on the price date (see
+  attach_keys), not to the current row as the original's loaders do.
 """
 
 from __future__ import annotations
 
-from pyspark.sql import Column, DataFrame, SparkSession
+from pyspark.sql import Column, DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
 
 from lakehouse.config import RECONCILIATION_TOLERANCE
@@ -162,12 +163,47 @@ def snapshots_to_apply(constituent_snapshot_dates: list, dim_high_water) -> list
 # --- facts ---------------------------------------------------------------------
 
 
-def attach_keys(df: DataFrame, dim_security_current: DataFrame, dim_date: DataFrame) -> DataFrame:
-    """Left-join security_key (current row per ticker) and date_key, keeping
-    rows that fail to match so the caller can count them before dropping."""
-    sk = dim_security_current.select("ticker", "security_key")
+def keying_windows(dim_security: DataFrame) -> DataFrame:
+    """The date range each dim_security version covers for keying facts.
+
+    A version covers dates from its effective_from up to the next version's
+    effective_from, so the versions of a ticker tile the whole timeline and
+    every price for a known ticker gets exactly one key:
+    - the first version also covers dates before the first snapshot (price
+      history starts in 2019; the first snapshot is much later);
+    - the latest version stays open, including after a removal from the index
+      (the security still has prices; it just left the index);
+    - a ticker removed and later re-added has no gap between the two.
+    """
+    w = Window.partitionBy("ticker")
+    ordered = w.orderBy("effective_from")
+    first = F.col("effective_from") == F.min("effective_from").over(w)
+    return dim_security.select(
+        F.col("ticker").alias("_k_ticker"),
+        "security_key",
+        F.when(first, F.lit(None).cast("date")).otherwise(F.col("effective_from")).alias("_k_from"),
+        F.lead("effective_from").over(ordered).alias("_k_to"),
+    )
+
+
+def attach_keys(df: DataFrame, dim_security: DataFrame, dim_date: DataFrame) -> DataFrame:
+    """Left-join security_key and date_key, keeping rows that fail to match so
+    the caller can count them before dropping.
+
+    Point-in-time: each row keys to the dim_security version in effect on its
+    date. The original pipeline keyed every fact to the current row, which
+    re-keys history after an attribute change (duplicate facts under the old
+    and new key on the next reload) and orphans a removed ticker's history.
+    """
+    k = keying_windows(dim_security)
+    in_window = (
+        (F.col("ticker") == F.col("_k_ticker"))
+        & (F.col("_k_from").isNull() | (F.col("date") >= F.col("_k_from")))
+        & (F.col("_k_to").isNull() | (F.col("date") < F.col("_k_to")))
+    )
     dk = dim_date.select("date", "date_key")
-    return df.join(sk, "ticker", "left").join(dk, "date", "left")
+    keyed = df.join(F.broadcast(k), in_window, "left").drop("_k_ticker", "_k_from", "_k_to")
+    return keyed.join(dk, "date", "left")
 
 
 def key_match_counts(keyed: DataFrame) -> dict[str, int]:

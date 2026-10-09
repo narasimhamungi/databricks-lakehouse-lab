@@ -161,11 +161,64 @@ def test_reconciliation_counts_mirror_the_report_headline(spark):
 def test_unmatched_keys_are_counted_not_silently_dropped(spark):
     d = date(2024, 1, 2)
     prices = spark.createDataFrame([("AAA", d, 1.0), ("ZZZ", d, 1.0), ("AAA", date(2030, 1, 1), 1.0)], PX)
-    dim_sec = spark.createDataFrame([(1, "AAA")], "security_key bigint, ticker string")
+    dim_sec = spark.createDataFrame([(1, "AAA", date(2024, 1, 1), None)], VERSIONS)
     dim_date = spark.createDataFrame([(20240102, d)], "date_key int, date date")
     keyed = gold.attach_keys(prices, dim_sec, dim_date)
     assert gold.key_match_counts(keyed) == {"rows": 3, "skipped_no_security_key": 1, "skipped_no_date_key": 1}
     assert gold.matched(keyed).count() == 1
+
+
+VERSIONS = "security_key bigint, ticker string, effective_from date, effective_to date"
+
+
+def _keys(spark, versions, prices):
+    dim = spark.createDataFrame(versions, VERSIONS)
+    px = spark.createDataFrame([(t, d, 1.0) for t, d in prices], PX)
+    days = sorted({d for _, d in prices})
+    dd = spark.createDataFrame([(int(d.strftime("%Y%m%d")), d) for d in days], "date_key int, date date")
+    keyed = gold.attach_keys(px, dim, dd).collect()
+    assert len(keyed) == len(prices)  # never fans out
+    return {(r["ticker"], r["date"]): r["security_key"] for r in keyed}
+
+
+def test_prices_key_to_the_version_in_effect_on_their_date(spark):
+    d = date
+    versions = [(1, "AAA", d(2024, 1, 1), d(2024, 2, 1)), (2, "AAA", d(2024, 2, 1), None)]
+    keys = _keys(
+        spark,
+        versions,
+        [("AAA", d(2019, 6, 3)), ("AAA", d(2024, 1, 31)), ("AAA", d(2024, 2, 1)), ("AAA", d(2024, 3, 1))],
+    )
+    # before the first snapshot -> first version; on the change date -> new version
+    assert keys == {
+        ("AAA", d(2019, 6, 3)): 1,
+        ("AAA", d(2024, 1, 31)): 1,
+        ("AAA", d(2024, 2, 1)): 2,
+        ("AAA", d(2024, 3, 1)): 2,
+    }
+
+
+def test_removed_ticker_keeps_its_history_keyed(spark):
+    d = date
+    versions = [(7, "OLD", d(2024, 1, 1), d(2024, 2, 1))]  # left the index on 2024-02-01, no successor
+    keys = _keys(spark, versions, [("OLD", d(2023, 5, 1)), ("OLD", d(2024, 3, 1)), ("NEW", d(2024, 3, 1))])
+    assert keys == {("OLD", d(2023, 5, 1)): 7, ("OLD", d(2024, 3, 1)): 7, ("NEW", d(2024, 3, 1)): None}
+
+
+def test_a_ticker_removed_and_re_added_has_no_keying_gap(spark):
+    d = date
+    versions = [(1, "AAA", d(2024, 1, 1), d(2024, 2, 1)), (2, "AAA", d(2024, 3, 1), None)]
+    keys = _keys(spark, versions, [("AAA", d(2024, 2, 15)), ("AAA", d(2024, 3, 2))])
+    assert keys == {("AAA", d(2024, 2, 15)): 1, ("AAA", d(2024, 3, 2)): 2}
+
+
+def test_an_attribute_change_does_not_rekey_existing_history(spark):
+    d = date
+    before = _keys(spark, [(1, "AAA", d(2024, 1, 1), None)], [("AAA", d(2024, 1, 10))])
+    after = _keys(
+        spark, [(1, "AAA", d(2024, 1, 1), d(2024, 2, 1)), (2, "AAA", d(2024, 2, 1), None)], [("AAA", d(2024, 1, 10))]
+    )
+    assert before == after  # so the next fact MERGE inserts nothing and duplicates nothing
 
 
 def test_fact_price_rows_use_postgres_numeric_types(spark):

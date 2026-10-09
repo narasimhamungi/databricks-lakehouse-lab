@@ -1,7 +1,11 @@
 """Command-line entry for the workflow tasks.
 
 On Databricks each task is a spark_python_task (jobs/<task>.py) that calls
-main(<task>). Locally: ``python jobs/bronze.py --local-root ./outputs/local``.
+main(<task>), and Unity Catalog keeps the tables between tasks.
+
+Locally, use scripts/run_local.py instead: a local SparkSession keeps its
+table catalog in memory, so tasks run as separate processes would not see
+each other's tables.
 """
 
 from __future__ import annotations

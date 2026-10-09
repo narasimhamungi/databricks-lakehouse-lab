@@ -363,8 +363,9 @@ def gold_task(spark: SparkSession, ctx: RunContext) -> dict:
         m = df.agg(F.max("date")).collect()[0][0]
         if m is not None:
             candidates.append(str(m))
-    if ctx.run_date:
-        candidates.append(ctx.run_date)
+    # Not extended to ctx.run_date: a drop that carries only a constituents
+    # snapshot would otherwise add calendar days with no prices, all marked
+    # as non-trading days.
     end = max(candidates)
     dim_date_df = gold.build_dim_date(spark, DIM_DATE_START, end, yf.select("date"))
     res = delta_io.merge_upsert(spark, cfg.table("gold", "dim_date"), dim_date_df, ("date_key",))
@@ -429,13 +430,15 @@ def gold_task(spark: SparkSession, ctx: RunContext) -> dict:
         raise ValueError("gold.dim_security does not exist and no constituents snapshot was available to build it")
     out["dim_security"] = scd2_log
 
-    dim_current = spark.table(dim_name).where("is_current")
+    # Every version, not just current rows: each price keys to the version in
+    # effect on its date (see gold.attach_keys).
+    dim_versions = spark.table(dim_name)
     dim_date_tbl = spark.table(cfg.table("gold", "dim_date"))
 
     # fact_price_daily: both vendors, (security, date, source) grain.
     parts, key_counts = [], {}
     for src, df in (("yfinance", yf), ("tiingo", tg)):
-        keyed = gold.attach_keys(df, dim_current, dim_date_tbl)
+        keyed = gold.attach_keys(df, dim_versions, dim_date_tbl)
         key_counts[src] = gold.key_match_counts(keyed)
         parts.append(gold.fact_price_daily_rows(keyed, src))
     facts = parts[0].unionByName(parts[1])
@@ -461,7 +464,7 @@ def gold_task(spark: SparkSession, ctx: RunContext) -> dict:
     # the original pipeline's whole-snapshot reconciliation report.
     consensus = gold.reconcile(yf, tg)
     recon = gold.reconciliation_counts(consensus)
-    keyed = gold.attach_keys(consensus, dim_current, dim_date_tbl)
+    keyed = gold.attach_keys(consensus, dim_versions, dim_date_tbl)
     res = delta_io.merge_upsert(
         spark,
         cfg.table("gold", "fact_price_daily_consensus"),

@@ -9,14 +9,13 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 from dataclasses import replace
 
 import pandas as pd
 import pytest
 from pyspark.sql import functions as F
 
-from lakehouse import export, manifest, tasks
+from lakehouse import export, local, manifest, tasks
 from lakehouse.config import LakehouseConfig
 from lakehouse.tasks import RunContext
 from tests import factory
@@ -34,23 +33,8 @@ def _stage(tmp_path):
     return staging, summary
 
 
-def _land(staging, landing, drop_date):
-    for source in os.listdir(staging):
-        src = os.path.join(staging, source, f"drop_date={drop_date}")
-        if os.path.isdir(src):
-            shutil.copytree(src, os.path.join(landing, source, f"drop_date={drop_date}"))
-    os.makedirs(os.path.join(landing, "_manifests"), exist_ok=True)
-    shutil.copy(os.path.join(staging, "_manifests", f"drop_date={drop_date}.json"), os.path.join(landing, "_manifests"))
-    ref = os.path.join(staging, "_reference")
-    if os.path.isdir(ref) and not os.path.isdir(os.path.join(landing, "_reference")):
-        shutil.copytree(ref, os.path.join(landing, "_reference"))
-
-
 def _run_all(spark, ctx):
-    out = {}
-    for name in ("setup", "verify_manifest", "bronze", "silver", "gold", "docs_and_tags", "dq_report"):
-        out[name] = tasks.TASKS[name](spark, ctx)
-    return out
+    return local.run_workflow(spark, ctx)
 
 
 @pytest.fixture(scope="module")
@@ -66,7 +50,7 @@ def built(spark, tmp_path_factory):
     staging, summary = _stage(tmp_path)
     runs = []
     for run_id, d in zip(BUILD_RUNS, summary["drop_dates"], strict=True):
-        _land(staging, cfg.landing_root, d)
+        local.stage_drop(staging, cfg.landing_root, d)
         # One planted OHLC violation in 24 rows: relax the warn tolerance so the
         # happy path passes; test_gate_fails_at_default_tolerance covers the rest.
         ctx = RunContext(cfg=cfg, run_id=run_id, run_date=d, warn_tolerance=0.9, constituents_count_range=(1, 1000))
@@ -182,33 +166,16 @@ def test_delta_evidence(spark, built):
 
 def test_scd2_merge_on_a_new_snapshot(spark, built):
     cfg, _, _ = built
-    new_snap = "2024-01-15"
-    cons = factory.constituents_frame(snapshot=new_snap, sector_ccc="Industrials")
-    cons = pd.concat(
-        [
-            cons[cons.ticker != "BBB"],
-            pd.DataFrame(
-                [
-                    {
-                        "ticker": "EEE",
-                        "company_name": "Epsilon",
-                        "gics_sector": "Energy",
-                        "gics_sub_industry": "Oil",
-                        "date_added": pd.NaT,
-                        "snapshot_date": pd.Timestamp(new_snap),
-                    }
-                ]
-            ),
-        ],
-        ignore_index=True,
-    )
+    new_snap = factory.LATER_SNAPSHOT
     export.write_landing_file(
-        cfg.landing_root, "constituents", pd.Timestamp(new_snap).date(), export.conform("constituents", cons)
+        cfg.landing_root,
+        "constituents",
+        pd.Timestamp(new_snap).date(),
+        export.conform("constituents", factory.later_constituents_frame()),
     )
     manifest.write_manifest(cfg.landing_root, manifest.build_manifest(cfg.landing_root, new_snap))
-    ctx = RunContext(
-        cfg=cfg, run_id="snap2", run_date=new_snap, warn_tolerance=0.9, constituents_count_range=(1, 1000), parity="off"
-    )
+    facts_before = spark.table(cfg.table("gold", "fact_price_daily")).count()
+    ctx = RunContext(cfg=cfg, run_id="snap2", run_date=new_snap, warn_tolerance=0.9, constituents_count_range=(1, 1000))
     out = _run_all(spark, ctx)
     assert out["gold"]["dim_security"][0]["new"] == 1
     assert out["gold"]["dim_security"][0]["changed"] == 1
@@ -221,3 +188,15 @@ def test_scd2_merge_on_a_new_snapshot(spark, built):
     closed = {(r["ticker"], str(r["effective_to"])) for r in dim.where("NOT is_current").collect()}
     assert closed == {("BBB", new_snap), ("CCC", new_snap)}
     assert dim.groupBy("security_key").count().where(F.col("count") > 1).count() == 0
+
+    # Point-in-time keying: the removed (BBB) and reclassified (CCC) tickers'
+    # price history keeps its keys, so the fact reload adds nothing.
+    n = len(factory.TRADING_DAYS)
+    fact = out["gold"]["fact_price_daily"]
+    assert fact["inserted"] == 0 and spark.table(cfg.table("gold", "fact_price_daily")).count() == facts_before
+    assert fact["key_matching"]["yfinance"]["skipped_no_security_key"] == 0
+    assert fact["key_matching"]["tiingo"]["skipped_no_security_key"] == n  # DDD was never a constituent
+    # A constituents-only drop does not stretch the calendar past the prices.
+    last_day = spark.table(cfg.table("gold", "dim_date")).agg(F.max("date")).collect()[0][0]
+    assert last_day == factory.TRADING_DAYS[-1]
+    assert out["dq_report"]["parity"]["status"] == "match"

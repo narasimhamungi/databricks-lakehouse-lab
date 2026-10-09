@@ -7,7 +7,8 @@ repo, after `pip install -e .`:
         --bronze-root "N:/.../marketdata-lakehouse/data/bronze" \
         --ingest-date 2026-09-08 \
         --landing-root ./landing \
-        --reconciliation-report "N:/.../marketdata-lakehouse/outputs/reconciliation_report_2026-09-08.txt"
+        --reconciliation-report "N:/.../marketdata-lakehouse/outputs/reconciliation_report_2026-09-08.txt" \
+        --extra-constituents 2026-10-07
 
 It reads marketdata-lakehouse's files and never writes to that repo. Upload
 ./landing to the Unity Catalog volume drop by drop (see docs/RUNBOOK.md).
@@ -34,6 +35,13 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="marketdata-lakehouse reconciliation report for the same ingest_date (parity target)",
     )
+    p.add_argument(
+        "--extra-constituents",
+        nargs="*",
+        default=[],
+        metavar="YYYY-MM-DD",
+        help="later bronze ingest dates whose constituents snapshot becomes an extra drop (SCD-2 on a real change)",
+    )
     args = p.parse_args(argv)
     summary = export_snapshot(
         args.bronze_root,
@@ -42,6 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         args.drops,
         overlap=not args.no_overlap,
         reconciliation_report=args.reconciliation_report,
+        extra_constituents=args.extra_constituents,
     )
     print(json.dumps(summary, indent=2, default=str))
     return 0

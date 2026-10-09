@@ -129,6 +129,33 @@ def write_mdl_bronze(root: str, ingest_date: str = INGEST_DATE) -> str:
     return bronze
 
 
+LATER_SNAPSHOT = "2024-01-15"
+
+
+def later_constituents_frame(snapshot: str = LATER_SNAPSHOT) -> pd.DataFrame:
+    """A later snapshot: BBB leaves the index, EEE joins, CCC is reclassified."""
+    cons = constituents_frame(snapshot=snapshot, sector_ccc="Industrials")
+    eee = pd.DataFrame(
+        [
+            {
+                "ticker": "EEE",
+                "company_name": "Epsilon",
+                "gics_sector": "Energy",
+                "gics_sub_industry": "Oil",
+                "date_added": pd.NaT,
+                "snapshot_date": pd.Timestamp(snapshot),
+            }
+        ]
+    )
+    return pd.concat([cons[cons.ticker != "BBB"], eee], ignore_index=True)
+
+
+def write_constituents_partition(root: str, ingest_date: str, frame: pd.DataFrame) -> None:
+    part = os.path.join(root, "bronze", "constituents", f"ingest_date={ingest_date}")
+    os.makedirs(part, exist_ok=True)
+    frame.to_parquet(os.path.join(part, "constituents.parquet"), index=False)
+
+
 RECON_REPORT = """Reconciliation report — ingest_date={d}
   Compared: {compared} (ticker, date) pairs present in both sources
   Flagged (> 0.50% adj_close discrepancy): {flagged} (12.50%)

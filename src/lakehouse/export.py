@@ -14,8 +14,10 @@ What it does:
    last drop also re-sends the previous drop's day, the way vendors restate,
    so the MERGE path sees an overlap it must not duplicate.
    Constituents and the FIGI map go in drop 1.
-4. Writes a manifest per drop: row count and sha256 per file.
-5. Optionally parses the original pipeline's reconciliation report into
+4. Optionally lands later constituents snapshots as extra drops (one per
+   date, after the last price drop), so SCD-2 runs on a real index change.
+5. Writes a manifest per drop: row count and sha256 per file.
+6. Optionally parses the original pipeline's reconciliation report into
    _reference/reconciliation_expected.json, the parity target for dq_report.
 """
 
@@ -223,7 +225,13 @@ def export_snapshot(
     n_drops: int = 3,
     overlap: bool = True,
     reconciliation_report: str | None = None,
+    extra_constituents: list[str] | None = None,
 ) -> dict:
+    """See the module docstring. ``extra_constituents`` lists later bronze
+    ingest dates whose constituents snapshot is landed as one extra drop each,
+    dated by that ingest date, so the SCD-2 dimension sees a real index change.
+    Prices are not taken from those partitions: the price snapshot, and the
+    parity reference, stay those of ``ingest_date``."""
     tables: dict[str, pa.Table] = {}
     for source in MDL_BRONZE_DIRS:
         df = read_mdl_partition(bronze_root, source, ingest_date)
@@ -247,7 +255,21 @@ def export_snapshot(
                 write_landing_file(landing_root, source, d, part)
                 files_written += 1
 
-    manifests = [build_manifest(landing_root, d.isoformat()) for d in drop_dates]
+    extra_dates = []
+    for extra in sorted(set(extra_constituents or [])):
+        extra_date = date.fromisoformat(extra)
+        if extra_date <= drop_dates[-1]:
+            raise ExportError(
+                f"Extra constituents snapshot {extra} must be later than the last price drop {drop_dates[-1]}"
+            )
+        df = read_mdl_partition(bronze_root, "constituents", extra)
+        if df.empty:
+            raise ExportError(f"No constituents bronze for ingest_date={extra} under {bronze_root}")
+        write_landing_file(landing_root, "constituents", extra_date, conform("constituents", df, snapshot_date=extra))
+        files_written += 1
+        extra_dates.append(extra_date)
+
+    manifests = [build_manifest(landing_root, d.isoformat()) for d in [*drop_dates, *extra_dates]]
     for m in manifests:
         write_manifest(landing_root, m)
 
@@ -271,6 +293,7 @@ def export_snapshot(
     return {
         "ingest_date": ingest_date,
         "drop_dates": [d.isoformat() for d in drop_dates],
+        "extra_constituent_drops": [d.isoformat() for d in extra_dates],
         "files_written": files_written,
         "rows_by_source": {s: t.num_rows for s, t in tables.items()},
         "rows_by_drop": {m["drop_date"]: m["total_rows"] for m in manifests},

@@ -40,7 +40,7 @@ COLUMN_COMMENTS: dict[tuple[str, str], dict[str, str]] = {
         "is_current": "True for the one in-effect row per ticker.",
     },
     ("gold", "fact_price_daily_consensus"): {
-        "primary_source": "Source of adj_close: yfinance when present (full universe), else tiingo.",
+        "primary_source": "Source of adj_close: yfinance when present (wider coverage), else tiingo.",
         "sources_available": "Which sources had a row for this security and date.",
         "pct_diff": "abs(yfinance - tiingo) / mean of the two; NULL when only one source.",
         "reconciliation_flag": "agreed, disagreed (above 0.5%), or single_source.",

@@ -42,19 +42,38 @@ Decisions the probe makes for you:
 
 ## 2. Export the snapshot (on your machine)
 
-Pick the bronze `ingest_date` whose reconciliation report you trust (for example
-2026-09-08):
+The export needs no Spark, so your normal Python works:
 
 ```powershell
-python scripts/export_snapshot.py `
-  --bronze-root "N:\AAA Projects\Financial projects\...\marketdata-lakehouse\data\bronze" `
-  --ingest-date 2026-09-08 `
-  --landing-root .\landing `
-  --reconciliation-report "N:\...\marketdata-lakehouse\outputs\reconciliation_report_2026-09-08.txt"
+$MDL = "N:\AAA Projects\Financial projects\Data Eng Quant projects\marketdata-lakehouse"
+python -m venv .venv-export
+.\.venv-export\Scripts\Activate.ps1
+pip install -e . pandas
+python scripts\export_snapshot.py --bronze-root "$MDL\data\bronze" --ingest-date 2026-09-08 `
+  --landing-root .\landing --extra-constituents 2026-10-07 `
+  --reconciliation-report "$MDL\outputs\reconciliation_report_2026-09-08.txt"
+python -c "from lakehouse.manifest import verify_landing; [print(r.render()) for r in verify_landing('landing')]"
 ```
 
-It prints the three drop dates and rows per drop. Nothing is written to marketdata-lakehouse.
-Keep the printed summary.
+It prints four drops: three price drops (2026-09-04, 2026-09-08, 2026-09-09) and the
+2026-10-07 constituents snapshot. Nothing is written to marketdata-lakehouse. If `landing`
+already exists from an earlier export, delete it first so no stale drop is left behind.
+
+## 2b. Local reproduction (optional, Docker only)
+
+This runs the same drops through the whole workflow on your machine before you spend
+Databricks quota. Run it in PowerShell with Docker Desktop open:
+
+```powershell
+docker run --rm -e SPARK_DRIVER_MEMORY=3g `
+  -v "N:\AAA Projects\Financial projects\databricks-lakehouse-lab:/repo" -w /work python:3.12-slim-bookworm `
+  bash -c "apt-get update -qq && apt-get install -y -qq openjdk-17-jre-headless procps > /dev/null && pip install -q -e '/repo[dev]' && python /repo/scripts/run_local.py --staging /repo/landing --root /work; mkdir -p /repo/outputs/local && rm -rf /repo/outputs/local/reports && cp -r /work/state/reports /repo/outputs/local/"
+python scripts\render_results.py outputs\local\reports > outputs\local\results.md
+```
+
+Expect one run per drop, then a re-run that writes nothing, and `parity match` from the
+2026-09-09 drop on. Use `python:3.12-slim-bookworm`: the plain `python:3.12-slim` image has
+no Java 17.
 
 ## 3. Deploy and set up
 
@@ -69,7 +88,8 @@ and the `landing` and `state` volumes in the `workspace` catalog.
 
 ## 4. Load drop by drop
 
-For each drop date the export printed, oldest first:
+For each drop date the export printed, oldest first (the fourth, 2026-10-07, carries only
+the later constituents snapshot and should show 6 new and 6 closed `dim_security` rows):
 
 ```powershell
 python scripts/upload_drop.py --drop-date <D> --landing-root .\landing `

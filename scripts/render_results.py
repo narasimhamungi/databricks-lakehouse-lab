@@ -35,19 +35,37 @@ def _row(task_rows: list[dict], task: str, table_suffix: str) -> dict | None:
     return None
 
 
+def _n(v) -> str:
+    return "-" if v is None else f"{v:,}"
+
+
 def _iu(r: dict | None) -> str:
-    return f"{r['inserted']} / {r['updated']}" if r else "-"
+    return f"{_n(r['inserted'])} / {_n(r['updated'])}" if r else "-"
+
+
+def _scd2(task_rows: list[dict]) -> str:
+    """new / changed / closed summed over the snapshots a run applied."""
+    totals, seen = {"new": 0, "changed": 0, "closed": 0}, False
+    for r in task_rows:
+        if r["task"] == "gold" and str(r["table_name"]).endswith(".dim_security") and r.get("note"):
+            note = json.loads(r["note"])
+            seen = True
+            for k in totals:
+                totals[k] += int(note.get(k, 0))
+    return f"{totals['new']} / {totals['changed']} / {totals['closed']}" if seen else "-"
 
 
 def render(report_dir: str) -> str:
-    runs = [r for r in _load(glob.glob(os.path.join(report_dir, "dq_report_*.json"))) if r.get("run_date")]
-    runs.sort(key=lambda r: r["run_date"])
+    reports = _load(glob.glob(os.path.join(report_dir, "dq_report_*.json")))
+    runs = sorted((r for r in reports if r.get("run_date")), key=lambda r: r["run_date"])
+    reruns = [r for r in reports if not r.get("run_date")]
     lines = ["### Drop-by-drop loads", ""]
     lines.append(
         "| Drop | Bronze rows added (yfinance) | Silver yfinance inserted / updated | "
-        "Silver Tiingo inserted / updated | Quarantined rows | Gates failed | Parity |"
+        "Silver Tiingo inserted / updated | dim_security new / changed / closed | Quarantined rows | "
+        "Gates failed | Parity |"
     )
-    lines.append("|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|")
     for r in runs:
         t = r.get("tasks", [])
         b = _row(t, "bronze", ".yfinance_prices")
@@ -55,8 +73,17 @@ def render(report_dir: str) -> str:
         st = _row(t, "silver", ".prices_tiingo")
         q = sum(r.get("quarantine", {}).values())
         lines.append(
-            f"| {r['run_date']} | {b['inserted'] if b else '-'} | {_iu(sy)} | {_iu(st)} | {q} | "
+            f"| {r['run_date']} | {_n(b['inserted']) if b else '-'} | {_iu(sy)} | {_iu(st)} | {_scd2(t)} | {q} | "
             f"{len(r['gates_failed'])} | {r['parity']['status']} |"
+        )
+
+    for r in reruns:
+        t = r.get("tasks", [])
+        ins = sum(int(x.get("inserted") or 0) for x in t)
+        upd = sum(int(x.get("updated") or 0) for x in t)
+        lines.append(
+            f"\nRun `{r['run_id']}` with no new drop: {_n(ins)} rows inserted and {_n(upd)} updated across "
+            f"{len(t)} table writes; {len(r['gates_failed'])} gates failed; parity {r['parity']['status']}."
         )
 
     final = runs[-1] if runs else None
