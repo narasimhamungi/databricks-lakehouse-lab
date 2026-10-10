@@ -158,9 +158,19 @@ def test_delta_evidence(spark, built):
     ev = tasks.delta_evidence(spark, RunContext(cfg=cfg, run_id="ev"))
     assert len(ev["time_travel"]) >= 3
     assert ev["schema_enforcement"]["rejected"] is True
+    cases = ev["schema_enforcement"]["cases"]
+    assert cases["extra_column_without_mergeSchema"]["rejected"] is True
+    assert cases["malformed_string_into_double"]["rejected"] is True
+    assert "numeric_string_into_double" in cases  # platform-dependent: recorded, not asserted
     assert "note" in ev["schema_evolution"]["columns_after"]
     assert ev["schema_evolution"]["rows_with_null_note"] == 1
     assert ev["optimize"]["files_after"] <= ev["optimize"]["files_before"]
+    assert [h["version"] for h in ev["optimize"]["bronze_history"]] == sorted(
+        h["version"] for h in ev["optimize"]["bronze_history"]
+    )
+    demo = ev["optimize"]["compaction_demo"]
+    if "error" not in demo:  # table properties are Databricks-specific on older OSS Delta
+        assert demo["files_after"] < demo["files_before"]
     assert os.path.isfile(os.path.join(cfg.state_root, "reports", "delta_evidence.json"))
 
 

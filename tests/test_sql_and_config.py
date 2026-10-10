@@ -69,3 +69,36 @@ def test_parity_check_reports_each_difference():
     assert parity_check(actual, {**actual, "tolerance": 0.005}) == []
     problems = parity_check(actual, {**actual, "flagged": 3, "tolerance": 0.01})
     assert any("tolerance" in p for p in problems) and any("flagged: reference 3" in p for p in problems)
+
+
+class _FakeSpark:
+    """Just enough of SparkSession.sql for ensure_catalog."""
+
+    def __init__(self, existing, fail_create=False):
+        self.existing, self.fail_create, self.calls = set(existing), fail_create, []
+
+    def sql(self, statement):
+        self.calls.append(statement)
+        if statement.startswith("SHOW CATALOGS LIKE"):
+            name = statement.split("'")[1]
+            return type("R", (), {"count": lambda _self: int(name in self.existing)})()
+        if self.fail_create:
+            raise PermissionError("PERMISSION_DENIED")
+        self.existing.add(statement.split()[-1])
+
+
+def test_ensure_catalog_creates_only_when_missing():
+    from lakehouse.tasks import ensure_catalog
+
+    spark = _FakeSpark({"workspace"})
+    assert ensure_catalog(spark, "workspace") is False
+    assert not any(c.startswith("CREATE") for c in spark.calls)
+    assert ensure_catalog(spark, "lakehouse_lab") is True
+    assert "CREATE CATALOG IF NOT EXISTS lakehouse_lab" in spark.calls
+
+
+def test_ensure_catalog_names_the_fallback_when_create_is_blocked():
+    from lakehouse.tasks import ensure_catalog
+
+    with pytest.raises(RuntimeError, match="--var catalog=workspace"):
+        ensure_catalog(_FakeSpark(set(), fail_create=True), "lakehouse_lab")

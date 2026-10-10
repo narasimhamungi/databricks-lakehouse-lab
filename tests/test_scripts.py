@@ -68,6 +68,10 @@ def test_upload_drop_dry_run_lists_every_source_and_the_manifest(tmp_path, capsy
     out = capsys.readouterr().out
     assert "yfinance_prices/drop_date=2026-09-03" in out and "fred_series/drop_date=2026-09-03" in out
     assert "_manifests/drop_date=2026-09-03.json" in out and "2 source folders" in out
+    lines = out.splitlines()
+    mk = next(i for i, ln in enumerate(lines) if ln.startswith("databricks fs mkdir") and ln.endswith("/_manifests"))
+    cp = next(i for i, ln in enumerate(lines) if "_manifests/drop_date=2026-09-03.json" in ln)
+    assert mk < cp  # single-file copies need their folder first
 
 
 def test_local_prepare_root_refuses_to_reuse_a_previous_run(tmp_path):
@@ -109,3 +113,37 @@ def test_local_stage_drop_copies_one_drop_with_its_manifest(tmp_path):
         raise AssertionError("expected LocalRunError")
     except local.LocalRunError:
         pass
+
+
+def test_render_delta_evidence_cases_and_compaction():
+    cases = {
+        "extra_column_without_mergeSchema": {"rejected": True},
+        "numeric_string_into_double": {"rejected": False, "stored_value": 3.25},
+    }
+    lines = render_results._enforcement_lines({"rejected": True, "cases": cases})
+    assert "  - extra column without mergeSchema: rejected." in lines
+    assert "  - numeric string into double: accepted (stored 3.25)." in lines
+    old_shape = render_results._enforcement_lines({"rejected": True})
+    assert old_shape == ["- Schema enforcement: mismatched append rejected = True."]
+    hist = [{"operation": "STREAMING UPDATE", "auto": None}, {"operation": "OPTIMIZE", "auto": "true"}]
+    demo = {"appends": 8, "files_before": 8, "files_after": 1}
+    out = render_results._compaction_lines({"bronze_history": hist, "compaction_demo": demo})
+    assert out == [
+        "- Bronze history: 2 commits, 1 of them automatic compactions (auto=true).",
+        "- OPTIMIZE with auto-compaction off (8 single-row appends): 8 files -> 1.",
+    ]
+
+
+def test_render_pipeline_expectations():
+    pe = {
+        "update_id": "u",
+        "flows": {
+            "c.s.dq_yfinance_prices_checked": {
+                "dropped_records": 0,
+                "expectations": {"close_positive": {"passed": 699775, "failed": 0}},
+            }
+        },
+    }
+    out = render_results._pipeline_lines(pe)
+    assert "| dq_yfinance_prices_checked | close_positive | 699,775 | 0 |" in out
+    assert out[-1] == "\nRows dropped by expect_or_drop: dq_yfinance_prices_checked 0."

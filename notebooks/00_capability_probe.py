@@ -10,7 +10,7 @@
 # MAGIC write / MERGE / history / time travel, Auto Loader with an available-now trigger and
 # MAGIC checkpoint (run twice), `_metadata` file columns, OPTIMIZE / VACUUM, comments, tags,
 # MAGIC GRANT, row filter. Checked by hand at the end: declarative pipeline, job retries and
-# MAGIC failure email, bundle deploy with a personal access token, lineage tab.
+# MAGIC failure email, bundle deploy from the CLI, lineage tab.
 
 # COMMAND ----------
 
@@ -197,7 +197,8 @@ check("row filter (optional - skip the claim if it fails)", row_filter)
 # MAGIC - **Job with dependencies, retries and failure email**: `databricks bundle run lakehouse_daily`
 # MAGIC   with a deliberately broken manifest (edit one byte of a landing file). PASS if the run fails at
 # MAGIC   `verify_manifest` and the email arrives.
-# MAGIC - **Bundle deploy with a personal access token**: PASS if `databricks bundle deploy` succeeds.
+# MAGIC - **Bundle deploy from the CLI** (OAuth via `databricks auth login`): PASS if
+# MAGIC   `databricks bundle deploy` succeeds.
 # MAGIC - **Lineage tab**: open a gold table in Catalog Explorer. PASS if upstream silver tables appear.
 
 # COMMAND ----------
@@ -205,7 +206,7 @@ check("row filter (optional - skip the claim if it fails)", row_filter)
 MANUAL = {
     "declarative pipeline run": "NOT RUN",
     "job retries + failure email": "NOT RUN",
-    "bundle deploy with PAT": "NOT RUN",
+    "bundle deploy (CLI auth)": "NOT RUN",
     "lineage tab": "NOT RUN",
 }
 rows = RESULTS + [{"check": k, "result": v, "detail": "manual"} for k, v in MANUAL.items()]

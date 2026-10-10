@@ -1,8 +1,8 @@
 """Upload one landing drop (all sources, its manifest, and the parity
 reference) to the Unity Catalog volume with the Databricks CLI.
 
-    python scripts/upload_drop.py --drop-date 2026-09-03 --landing-root ./landing \
-        --volume dbfs:/Volumes/workspace/lakehouse_ops/landing
+    python scripts/upload_drop.py --drop-date 2026-09-04 --landing-root ./landing \
+        --volume dbfs:/Volumes/lakehouse_lab/lakehouse_ops/landing
 
 Uploading one drop at a time, then running the job, is what makes the loads
 incremental: the job only ever sees what has "arrived".
@@ -25,11 +25,21 @@ def cp(src: str, dst: str, recursive: bool, dry_run: bool) -> None:
         subprocess.run(cmd, check=True)
 
 
+def mkdir(path: str, dry_run: bool) -> None:
+    # `fs cp -r` creates the target folder, but a single-file `fs cp` into a
+    # volume folder that does not exist yet fails ("no such directory").
+    # `fs mkdir` is idempotent, so it is safe on every drop.
+    cmd = ["databricks", "fs", "mkdir", path]
+    print(" ".join(cmd))
+    if not dry_run:
+        subprocess.run(cmd, check=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--drop-date", required=True)
     p.add_argument("--landing-root", default="./landing")
-    p.add_argument("--volume", default="dbfs:/Volumes/workspace/lakehouse_ops/landing")
+    p.add_argument("--volume", default="dbfs:/Volumes/lakehouse_lab/lakehouse_ops/landing")
     p.add_argument("--dry-run", action="store_true")
     a = p.parse_args(argv)
 
@@ -42,9 +52,11 @@ def main(argv: list[str] | None = None) -> int:
     manifest = os.path.join(a.landing_root, "_manifests", f"drop_date={a.drop_date}.json")
     if not os.path.isfile(manifest):
         sys.exit(f"no manifest for {a.drop_date} at {manifest}")
+    mkdir(f"{a.volume}/_manifests", a.dry_run)
     cp(manifest, f"{a.volume}/_manifests/drop_date={a.drop_date}.json", False, a.dry_run)
     reference = os.path.join(a.landing_root, "_reference", "reconciliation_expected.json")
     if os.path.isfile(reference):
+        mkdir(f"{a.volume}/_reference", a.dry_run)
         cp(reference, f"{a.volume}/_reference/reconciliation_expected.json", False, a.dry_run)
     print(f"{sent} source folders for drop {a.drop_date}")
     return 0

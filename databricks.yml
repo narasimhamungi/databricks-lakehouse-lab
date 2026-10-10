@@ -1,6 +1,6 @@
 # Databricks Asset Bundle: the jobs (and an optional declarative pipeline) as code.
 # Deploy:  databricks bundle deploy -t dev
-# Run:     databricks bundle run lakehouse_daily -t dev -- --run_date=2026-09-03
+# Run:     databricks bundle run lakehouse_daily -t dev --params run_date=2026-09-04
 # See docs/RUNBOOK.md. This is a bundle, not Terraform.
 
 bundle:
@@ -8,8 +8,10 @@ bundle:
 
 variables:
   catalog:
-    description: Unity Catalog catalog. Free Edition has "workspace"; use it if CREATE CATALOG is blocked.
-    default: workspace
+    description: >-
+      Unity Catalog catalog; lakehouse_setup creates it if it is missing. Use
+      --var catalog=workspace (Free Edition's built-in catalog) where CREATE CATALOG is blocked.
+    default: lakehouse_lab
   schema_prefix:
     description: Prefix for the bronze/silver/gold/ops schemas.
     default: lakehouse_
@@ -41,10 +43,14 @@ resources:
             environment_version: "2"
       tasks:
         # Deterministic checks get no retries: re-running a hash mismatch or a
-        # failed quality gate only delays the alert.
+        # failed quality gate only delays the alert. max_retries: 0 is not
+        # enough on serverless: auto-optimization retries failed tasks unless
+        # it is disabled per task (seen on the first deliberate failure: two
+        # attempts of verify_manifest).
         - task_key: verify_manifest
           environment_key: default
           max_retries: 0
+          disable_auto_optimization: true
           spark_python_task:
             python_file: ./jobs/verify_manifest.py
             # Shared by every task (YAML anchor). --src-root lets jobs/*.py
@@ -98,6 +104,7 @@ resources:
           depends_on: [{ task_key: docs_and_tags }]
           environment_key: default
           max_retries: 0
+          disable_auto_optimization: true
           spark_python_task:
             python_file: ./jobs/dq_report.py
             parameters: *task_args
@@ -156,3 +163,30 @@ targets:
             lakehouse.catalog: ${var.catalog}
             lakehouse.schema_prefix: ${var.schema_prefix}
             lakehouse.src_root: ${workspace.file_path}/src
+          # Publish the event log as a Unity Catalog table so the expectation
+          # counts can be read (and kept) after the run.
+          event_log:
+            catalog: ${var.catalog}
+            schema: ${var.schema_prefix}ops
+            name: dq_pipeline_event_log
+      jobs:
+        # Runs the pipeline, then reads its event log into
+        # state/reports/pipeline_expectations.json.
+        lakehouse_dq_evidence:
+          name: lakehouse-dq-evidence
+          parameters: *job_params
+          environments:
+            - environment_key: default
+              spec:
+                environment_version: "2"
+          tasks:
+            - task_key: run_pipeline
+              pipeline_task:
+                pipeline_id: ${resources.pipelines.lakehouse_dq_expectations.id}
+                full_refresh: true
+            - task_key: pipeline_evidence
+              depends_on: [{ task_key: run_pipeline }]
+              environment_key: default
+              spark_python_task:
+                python_file: ./jobs/pipeline_evidence.py
+                parameters: *task_args

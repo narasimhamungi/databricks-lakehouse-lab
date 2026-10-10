@@ -23,7 +23,7 @@ import sys
 def _load(paths: list[str]) -> list[dict]:
     out = []
     for p in sorted(paths):
-        with open(p, encoding="utf-8") as fh:
+        with open(p, encoding="utf-8-sig") as fh:  # tolerate a BOM from PowerShell
             out.append(json.load(fh))
     return out
 
@@ -111,14 +111,65 @@ def render(report_dir: str) -> str:
             "### Delta Lake evidence",
             "",
             f"- Time travel: row count by version of silver yfinance {ev['time_travel']}.",
-            f"- Schema enforcement: mismatched append rejected = {ev['schema_enforcement']['rejected']}.",
+            *_enforcement_lines(ev["schema_enforcement"]),
             f"- Schema evolution: columns after mergeSchema append {ev['schema_evolution']['columns_after']}.",
             f"- OPTIMIZE on {opt['table']}: {opt['files_before']} files -> {opt['files_after']}. "
             f"Query seconds before {opt['query_seconds_before']}, after {opt['query_seconds_after']} "
             f"({opt['note']}).",
+            *_compaction_lines(opt),
             f"- VACUUM: {ev.get('vacuum')}.",
         ]
+    pe_path = os.path.join(report_dir, "pipeline_expectations.json")
+    if os.path.isfile(pe_path):
+        lines += _pipeline_lines(_load([pe_path])[0])
     return "\n".join(lines) + "\n"
+
+
+def _pipeline_lines(pe: dict) -> list[str]:
+    """Expectation counts from the declarative pipeline's event log."""
+    out = [
+        "",
+        "### Declarative pipeline expectations",
+        "",
+        "| Dataset | Expectation | Passed | Failed |",
+        "|---|---|---|---|",
+    ]
+    dropped = []
+    for flow, f in sorted(pe["flows"].items()):
+        name = flow.split(".")[-1]
+        for exp, c in sorted(f["expectations"].items()):
+            out.append(f"| {name} | {exp} | {c['passed']:,} | {c['failed']:,} |")
+        dropped.append(f"{name} {f['dropped_records']:,}")
+    out.append(f"\nRows dropped by expect_or_drop: {', '.join(dropped)}.")
+    return out
+
+
+def _enforcement_lines(se: dict) -> list[str]:
+    cases = se.get("cases")
+    if not cases:  # reports from before the cases were split out
+        return [f"- Schema enforcement: mismatched append rejected = {se['rejected']}."]
+    out = ["- Schema enforcement:"]
+    for name, c in cases.items():
+        verdict = "rejected" if c["rejected"] else f"accepted (stored {c.get('stored_value', '?')})"
+        out.append(f"  - {name.replace('_', ' ')}: {verdict}.")
+    return out
+
+
+def _compaction_lines(opt: dict) -> list[str]:
+    out = []
+    hist = opt.get("bronze_history") or []
+    auto = [h for h in hist if h["operation"] == "OPTIMIZE" and str(h.get("auto")).lower() == "true"]
+    if hist:
+        out.append(f"- Bronze history: {len(hist)} commits, {len(auto)} of them automatic compactions (auto=true).")
+    demo = opt.get("compaction_demo") or {}
+    if "files_before" in demo:
+        out.append(
+            f"- OPTIMIZE with auto-compaction off ({demo['appends']} single-row appends): "
+            f"{demo['files_before']} files -> {demo['files_after']}."
+        )
+    elif "error" in demo:
+        out.append(f"- Compaction demo failed: {demo['error']}.")
+    return out
 
 
 if __name__ == "__main__":

@@ -16,7 +16,6 @@ from dataclasses import dataclass, field
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
-from pyspark.sql.utils import AnalysisException
 
 from lakehouse import bronze as bronze_mod
 from lakehouse import delta_io, gold, manifest, quality, silver
@@ -108,9 +107,27 @@ def _empty(spark: SparkSession, schema) -> DataFrame:
 # --- setup -----------------------------------------------------------------------
 
 
+def ensure_catalog(spark, catalog: str) -> bool:
+    """Create the Unity Catalog catalog if it does not exist. Returns True
+    when it was created. CREATE CATALOG needs the metastore privilege, so the
+    error names the fallback instead of failing obscurely."""
+    if spark.sql(f"SHOW CATALOGS LIKE '{catalog}'").count():
+        return False
+    try:
+        spark.sql(f"CREATE CATALOG IF NOT EXISTS {catalog}")
+    except Exception as exc:  # noqa: BLE001 - re-raised with the fix
+        raise RuntimeError(
+            f"cannot create catalog {catalog!r} ({type(exc).__name__}); "
+            "deploy with --var catalog=workspace to use the built-in catalog"
+        ) from exc
+    return True
+
+
 def setup(spark: SparkSession, ctx: RunContext) -> dict:
     cfg = ctx.cfg
     created = []
+    if cfg.catalog and ensure_catalog(spark, cfg.catalog):
+        created.append(cfg.catalog)
     for layer in LAYERS:
         delta_io.ensure_schema(spark, cfg.schema(layer), f"databricks-lakehouse-lab {layer} layer")
         created.append(cfg.schema(layer))
@@ -665,6 +682,57 @@ def _timed(spark: SparkSession, sql: str, repeats: int = 3) -> list[float]:
     return times
 
 
+def _try_append(df: DataFrame, table: str) -> dict:
+    try:
+        df.write.format("delta").mode("append").saveAsTable(table)
+        return {"rejected": False}
+    except Exception as exc:  # noqa: BLE001 - AnalysisException locally, Spark Connect types on serverless
+        return {"rejected": True, "error": type(exc).__name__ + ": " + str(exc).splitlines()[0][:200]}
+
+
+def _history_summary(spark: SparkSession, table: str) -> list[dict]:
+    """Each commit's operation, whether Databricks ran it automatically
+    (auto-compaction), and the files it added and removed."""
+    rows = (
+        spark.sql(f"DESCRIBE HISTORY {table}")
+        .select("version", "operation", "operationParameters", "operationMetrics")
+        .collect()
+    )
+    out = []
+    for h in sorted(rows, key=lambda h: h["version"]):
+        params, metrics = h["operationParameters"] or {}, h["operationMetrics"] or {}
+        out.append(
+            {
+                "version": int(h["version"]),
+                "operation": h["operation"],
+                "auto": params.get("auto"),
+                "files_added": metrics.get("numAddedFiles") or metrics.get("numFiles"),
+                "files_removed": metrics.get("numRemovedFiles"),
+            }
+        )
+    return out
+
+
+def _compaction_demo(spark: SparkSession, table: str, appends: int = 8) -> dict:
+    """OPTIMIZE where it has work to do: one file per small append, with
+    auto-compaction and optimized writes off for this table only."""
+    try:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+        spark.sql(
+            f"CREATE TABLE {table} (id BIGINT) USING DELTA TBLPROPERTIES "
+            "('delta.autoOptimize.autoCompact' = 'false', 'delta.autoOptimize.optimizeWrite' = 'false')"
+        )
+        for i in range(appends):
+            spark.range(i, i + 1).coalesce(1).write.format("delta").mode("append").saveAsTable(table)
+        before = delta_io.detail(spark, table)["num_files"]
+        spark.sql(f"OPTIMIZE {table}")
+        result = {"appends": appends, "files_before": before, "files_after": delta_io.detail(spark, table)["num_files"]}
+    except Exception as exc:  # noqa: BLE001 - evidence job records the failure and carries on
+        result = {"error": type(exc).__name__ + ": " + str(exc).splitlines()[0][:200]}
+    spark.sql(f"DROP TABLE IF EXISTS {table}")
+    return result
+
+
 def delta_evidence(spark: SparkSession, ctx: RunContext) -> dict:
     """Time travel, schema enforcement and evolution, OPTIMIZE and VACUUM,
     on the tables the pipeline built. Writes delta_evidence.json."""
@@ -688,21 +756,22 @@ def delta_evidence(spark: SparkSession, ctx: RunContext) -> dict:
         for v in versions
     }
 
+    # Schema enforcement. The canonical Delta case is an append that adds a
+    # column without mergeSchema. The two type cases record how the platform
+    # treats a string written to a DOUBLE column: on Databricks serverless the
+    # malformed value failed as a cast error (CAST_INVALID_INPUT), i.e. the
+    # write attempted an implicit cast rather than rejecting the type outright.
     scratch = cfg.table("ops", "evidence_schema_demo")
     spark.sql(f"DROP TABLE IF EXISTS {scratch}")
     spark.createDataFrame([(1, 1.5)], "id int, price double").write.format("delta").saveAsTable(scratch)
-    try:
-        spark.createDataFrame([(2, "not a number")], "id int, price string").write.format("delta").mode(
-            "append"
-        ).saveAsTable(scratch)
-        ev["schema_enforcement"] = {"rejected": False}
-    except AnalysisException as exc:
-        ev["schema_enforcement"] = {"rejected": True, "error": str(exc).splitlines()[0][:200]}
-    except Exception as exc:  # noqa: BLE001 - Spark Connect raises its own exception types
-        ev["schema_enforcement"] = {
-            "rejected": True,
-            "error": type(exc).__name__ + ": " + str(exc).splitlines()[0][:200],
-        }
+    cases = {
+        "extra_column_without_mergeSchema": _try_append(
+            spark.createDataFrame([(2, 1.0, "x")], "id int, price double, note string"), scratch
+        ),
+        "malformed_string_into_double": _try_append(
+            spark.createDataFrame([(2, "not a number")], "id int, price string"), scratch
+        ),
+    }
     spark.createDataFrame([(3, 2.5, "added later")], "id int, price double, note string").write.format("delta").mode(
         "append"
     ).option("mergeSchema", "true").saveAsTable(scratch)
@@ -711,7 +780,18 @@ def delta_evidence(spark: SparkSession, ctx: RunContext) -> dict:
         "rows_with_null_note": spark.table(scratch).where("note IS NULL").count(),
     }
     spark.sql(f"DROP TABLE IF EXISTS {scratch}")
+    spark.createDataFrame([(1, 1.5)], "id int, price double").write.format("delta").saveAsTable(scratch)
+    cases["numeric_string_into_double"] = _try_append(
+        spark.createDataFrame([(4, "3.25")], "id int, price string"), scratch
+    )
+    if not cases["numeric_string_into_double"]["rejected"]:
+        cases["numeric_string_into_double"]["stored_value"] = spark.table(scratch).where("id = 4").first()["price"]
+    spark.sql(f"DROP TABLE IF EXISTS {scratch}")
+    canonical = cases["extra_column_without_mergeSchema"]
+    ev["schema_enforcement"] = {"rejected": canonical["rejected"], "error": canonical.get("error"), "cases": cases}
 
+    # OPTIMIZE on the real bronze table, plus its write history: Databricks
+    # auto-compaction can leave little for a manual OPTIMIZE to do.
     bronze_t = cfg.table("bronze", "yfinance_prices")
     probe_sql = f"SELECT ticker, count(*) AS n, max(close) AS mx FROM {bronze_t} WHERE ticker LIKE 'A%' GROUP BY ticker"
     before = delta_io.detail(spark, bronze_t)
@@ -726,6 +806,8 @@ def delta_evidence(spark: SparkSession, ctx: RunContext) -> dict:
         "query_seconds_before": t_before,
         "query_seconds_after": t_after,
         "note": "three runs each; first runs include cache warm-up",
+        "bronze_history": _history_summary(spark, bronze_t),
+        "compaction_demo": _compaction_demo(spark, cfg.table("ops", "evidence_compaction_demo")),
     }
     try:
         dry = spark.sql(f"VACUUM {bronze_t} DRY RUN").collect()
@@ -744,6 +826,61 @@ def delta_evidence(spark: SparkSession, ctx: RunContext) -> dict:
     return ev
 
 
+PIPELINE_EVENT_LOG = "dq_pipeline_event_log"
+
+
+def summarise_expectations(events: list[dict]) -> dict:
+    """Expectation results per dataset for the latest pipeline update, from
+    event-log rows with event_type, update_id, flow_name, timestamp, details.
+
+    details is the event's JSON (a string in the published event log). Only
+    the flow's COMPLETED events are counted when it has any, so a progress
+    event that repeats the totals is not counted twice."""
+    updates = [e for e in events if e["event_type"] == "create_update"]
+    latest = max(updates, key=lambda e: e["timestamp"])["update_id"] if updates else None
+    per_flow: dict[str, list[tuple[str, dict]]] = {}
+    for e in events:
+        if e["event_type"] != "flow_progress" or (latest and e["update_id"] != latest):
+            continue
+        details = json.loads(e["details"]) if isinstance(e["details"], str) else (e["details"] or {})
+        progress = details.get("flow_progress") or {}
+        if progress.get("data_quality"):
+            per_flow.setdefault(e["flow_name"], []).append((progress.get("status"), progress["data_quality"]))
+    flows = {}
+    for flow, items in per_flow.items():
+        completed = [dq for status, dq in items if status == "COMPLETED"]
+        chosen = completed or [dq for _, dq in items]
+        expectations: dict[str, dict] = {}
+        dropped = 0
+        for dq in chosen:
+            dropped += int(dq.get("dropped_records") or 0)
+            for x in dq.get("expectations") or []:
+                agg = expectations.setdefault(x["name"], {"passed": 0, "failed": 0})
+                agg["passed"] += int(x.get("passed_records") or 0)
+                agg["failed"] += int(x.get("failed_records") or 0)
+        flows[flow] = {"dropped_records": dropped, "expectations": expectations}
+    return {"update_id": latest, "flows": flows}
+
+
+def pipeline_evidence(spark: SparkSession, ctx: RunContext) -> dict:
+    """Read the declarative pipeline's published event log and write the
+    expectation counts of its latest update to pipeline_expectations.json.
+    Fails if the log holds no expectation results, so a silent pass is
+    impossible."""
+    log_t = ctx.cfg.table("ops", PIPELINE_EVENT_LOG)
+    rows = spark.sql(
+        f"SELECT event_type, origin.update_id AS update_id, origin.flow_name AS flow_name, timestamp, details "
+        f"FROM {log_t}"
+    ).collect()
+    summary = summarise_expectations([r.asDict(recursive=True) for r in rows])
+    if not summary["flows"]:
+        raise RuntimeError(f"no expectation results for the latest update in {log_t}")
+    path = _write_report(ctx, "pipeline_expectations.json", summary)
+    ctx.say(json.dumps(summary, indent=2, default=str))
+    ctx.say(f"pipeline expectations written to {path}")
+    return summary
+
+
 TASKS = {
     "setup": setup,
     "verify_manifest": verify_manifest,
@@ -753,4 +890,5 @@ TASKS = {
     "docs_and_tags": docs_and_tags,
     "dq_report": dq_report,
     "delta_evidence": delta_evidence,
+    "pipeline_evidence": pipeline_evidence,
 }

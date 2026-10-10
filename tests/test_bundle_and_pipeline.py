@@ -35,6 +35,13 @@ def test_retries_only_on_tasks_that_can_fail_transiently():
     assert retries == {"verify_manifest": 0, "bronze": 2, "silver": 2, "gold": 2, "docs_and_tags": 2, "dq_report": 0}
 
 
+def test_no_retry_tasks_also_disable_serverless_auto_optimization():
+    # Serverless auto-optimization retries failed tasks regardless of
+    # max_retries; at-most-once tasks must switch it off explicitly.
+    for t in _daily()["tasks"]:
+        assert t.get("disable_auto_optimization", False) is (t.get("max_retries", 0) == 0), t["task_key"]
+
+
 def test_failure_email_and_run_date_parameter():
     job = _daily()
     assert job["email_notifications"]["on_failure"] == ["${var.failure_email}"]
@@ -59,10 +66,14 @@ def test_every_task_points_at_an_existing_entry_point_with_shared_args():
 def test_every_referenced_job_parameter_is_declared_on_its_job():
     # The Jobs API rejects {{job.parameters.X}} when the job has no parameter X
     # (400 INVALID_PARAMETER_VALUE at deploy); the CLI's schema check does not.
-    for key, job in _bundle()["resources"]["jobs"].items():
+    bundle = _bundle()
+    jobs = dict(bundle["resources"]["jobs"])
+    for target in bundle["targets"].values():
+        jobs.update((target.get("resources") or {}).get("jobs") or {})
+    for key, job in jobs.items():
         declared = {p["name"] for p in job.get("parameters", [])}
         for t in job["tasks"]:
-            for arg in t["spark_python_task"]["parameters"]:
+            for arg in (t.get("spark_python_task") or {}).get("parameters", []):
                 for ref in re.findall(r"\{\{job\.parameters\.(\w+)\}\}", arg):
                     assert ref in declared, f"{key}.{t['task_key']} references undeclared job parameter {ref}"
 
@@ -73,6 +84,17 @@ def test_pipeline_only_in_its_own_target():
     pipe = bundle["targets"]["dev_pipeline"]["resources"]["pipelines"]["lakehouse_dq_expectations"]
     assert pipe["serverless"] is True
     assert os.path.isfile(os.path.join(ROOT, pipe["libraries"][0]["file"]["path"]))
+
+
+def test_pipeline_publishes_its_event_log_and_a_job_reads_it_after_the_run():
+    res = _bundle()["targets"]["dev_pipeline"]["resources"]
+    log = res["pipelines"]["lakehouse_dq_expectations"]["event_log"]
+    assert log == {"catalog": "${var.catalog}", "schema": "${var.schema_prefix}ops", "name": "dq_pipeline_event_log"}
+    tasks = {t["task_key"]: t for t in res["jobs"]["lakehouse_dq_evidence"]["tasks"]}
+    pipeline_id = tasks["run_pipeline"]["pipeline_task"]["pipeline_id"]
+    assert pipeline_id == "${resources.pipelines.lakehouse_dq_expectations.id}"
+    assert tasks["pipeline_evidence"]["depends_on"] == [{"task_key": "run_pipeline"}]
+    assert os.path.isfile(os.path.join(ROOT, tasks["pipeline_evidence"]["spark_python_task"]["python_file"]))
 
 
 def test_pipeline_source_uses_the_shared_rules():

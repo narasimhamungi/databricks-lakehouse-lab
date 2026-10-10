@@ -7,38 +7,31 @@ on macOS or Linux, replace the backtick line breaks with `\`.
 ## 0. Prerequisites
 
 - A Databricks Free Edition workspace.
-- The Databricks CLI with bundle support (`databricks --version`; the bundle schema
-  in this repo was checked against CLI v1.20.0).
+- The Databricks CLI with bundle support (`databricks --version`; checked with v1.20.0).
 - Python 3.10+ and this repo: `pip install -e ".[dev]"`.
 - marketdata-lakehouse's `data/bronze` folder, already ingested and checked.
 
-Authenticate once:
+Authenticate once (OAuth in the browser; no personal access token needed):
 
 ```powershell
 databricks auth login --host https://<your-workspace>.cloud.databricks.com
 ```
 
-If you want to try a personal access token instead (a Day 0 check), create one under
-Settings > Developer and run `databricks configure`.
-
 ## 1. Day 0 probe (one hour)
 
-1. `databricks bundle deploy -t dev` syncs the repo, including `notebooks/00_capability_probe.py`.
-   If the deploy itself fails, import just the notebook:
-   `databricks workspace import --format SOURCE --language PYTHON notebooks/00_capability_probe.py /Users/<you>/00_capability_probe`.
-2. Open the notebook on serverless compute and Run all.
-3. Do the four manual checks listed at the end of the notebook, set them in `MANUAL`, re-run the last cells.
-4. Copy the printed table into the README's Platform section. **Keep only PASS rows as claims.**
+1. Import `notebooks/00_capability_probe.py` (Workspace > Import, or
+   `databricks workspace import --format SOURCE --language PYTHON notebooks/00_capability_probe.py /Users/<you>/00_capability_probe`).
+2. Open it on serverless compute and Run all.
+3. Copy the printed table into the README's Platform section. **Keep only PASS rows as claims.**
 
 Decisions the probe makes for you:
 
 | If this fails | Do this |
 |---|---|
-| create catalog | Keep `catalog=workspace` (the bundle default). |
+| create catalog | Deploy with `--var catalog=workspace` (Free Edition's built-in catalog) and use `workspace` in every path below. |
 | Auto Loader | Deploy with `--var ingest_mode=batch`, or `filestream` if that check passed. Don't claim Auto Loader. |
-| declarative pipeline | Never deploy `-t dev_pipeline`. Don't claim pipeline expectations. |
 | table tags | `docs_and_tags` reports the failure and carries on. Don't claim tags. |
-| row filter | Expected to be skipped. Don't claim masking or row filters. |
+| row filter | Don't claim masking or row filters. |
 
 ## 2. Export the snapshot (on your machine)
 
@@ -71,7 +64,7 @@ docker run --rm -e SPARK_DRIVER_MEMORY=3g `
 python scripts\render_results.py outputs\local\reports | Out-File -Encoding utf8 outputs\local\results.md
 ```
 
-Expect one run per drop, then a re-run that writes nothing, and `parity match` from the
+Expect one run per drop, then a re-run that changes no rows, and `parity match` from the
 2026-09-09 drop on. Use `python:3.12-slim-bookworm`: the plain `python:3.12-slim` image has
 no Java 17.
 
@@ -79,47 +72,54 @@ no Java 17.
 
 ```powershell
 databricks bundle validate -t dev
-databricks bundle deploy -t dev                      # add --var ingest_mode=batch if step 1 said so
+databricks bundle deploy -t dev
 databricks bundle run lakehouse_setup -t dev
+databricks schemas list lakehouse_lab
 ```
 
-`lakehouse_setup` creates `lakehouse_bronze`, `lakehouse_silver`, `lakehouse_gold`, `lakehouse_ops`
-and the `landing` and `state` volumes in the `workspace` catalog.
+`lakehouse_setup` creates the `lakehouse_lab` catalog if it is missing, the `lakehouse_bronze`,
+`lakehouse_silver`, `lakehouse_gold` and `lakehouse_ops` schemas, and the `landing` and `state`
+volumes. The last command must list the four schemas.
 
 ## 4. Load drop by drop
 
-For each drop date the export printed, oldest first (the fourth, 2026-10-07, carries only
-the later constituents snapshot and should show 6 new and 6 closed `dim_security` rows):
+Upload one drop, run the job for it, then the next. The loop stops at the first failure; a final
+run with no new drop and no `run_date` must change no rows (the idempotency evidence):
 
 ```powershell
-python scripts/upload_drop.py --drop-date <D> --landing-root .\landing `
-  --volume dbfs:/Volumes/workspace/lakehouse_ops/landing
-databricks bundle run lakehouse_daily -t dev --params run_date=<D>
+$V = "dbfs:/Volumes/lakehouse_lab/lakehouse_ops/landing"
+$ok = $true
+foreach ($D in "2026-09-04","2026-09-08","2026-09-09","2026-10-07") {
+  python scripts\upload_drop.py --drop-date $D --landing-root .\landing --volume $V
+  if ($LASTEXITCODE -ne 0) { $ok = $false; break }
+  databricks bundle run lakehouse_daily -t dev --params run_date=$D
+  if ($LASTEXITCODE -ne 0) { $ok = $false; break }
+}
+if ($ok) { databricks bundle run lakehouse_daily -t dev }
 ```
 
-Evidence: a screenshot of the green run graph for the last drop.
-
-Then run once more with no new drop and no `run_date`. Every task should report
-0 inserted and 0 updated, which is the idempotency evidence:
-
-```powershell
-databricks bundle run lakehouse_daily -t dev
-```
+The 2026-10-07 drop carries only the later constituents snapshot: expect 6 new and 6 closed
+`dim_security` rows. Evidence: a screenshot of the run graph of the final run
+(`docs/screenshots/run_graph.png`).
 
 ## 5. One deliberate failure
 
-Break the manifest, not the data, so nothing bad can be ingested:
+Break one row count in a copy of a manifest, run that drop, then put the original back. The data
+files are never touched, so nothing bad can be ingested:
 
 ```powershell
-databricks fs cp dbfs:/Volumes/workspace/lakehouse_ops/landing/_manifests/drop_date=<D1>.json .\m.json
-# edit one "rows" value in m.json
-databricks fs cp .\m.json dbfs:/Volumes/workspace/lakehouse_ops/landing/_manifests/drop_date=<D1>.json --overwrite
-databricks bundle run lakehouse_daily -t dev --params run_date=<D1>
+$M = "dbfs:/Volumes/lakehouse_lab/lakehouse_ops/landing/_manifests/drop_date=2026-09-04.json"
+(Get-Content ".\landing\_manifests\drop_date=2026-09-04.json" -Raw).Replace('"rows": 503,', '"rows": 502,') | Set-Content .\m_broken.json -Encoding ascii -NoNewline
+databricks fs cp .\m_broken.json $M --overwrite
+databricks bundle run lakehouse_daily -t dev --params run_date=2026-09-04
+databricks fs cp ".\landing\_manifests\drop_date=2026-09-04.json" $M --overwrite
+Remove-Item .\m_broken.json
 ```
 
-Expected: the run fails at `verify_manifest` with no retry, and the failure email arrives.
-Evidence: screenshots of the failed run and the email. Restore the original manifest afterwards
-with `python scripts/upload_drop.py --drop-date <D1> ...`.
+Expected: `verify_manifest` fails once, every later task is skipped, and the failure email
+arrives. "Once" needs `disable_auto_optimization: true` on the task: serverless auto-optimization
+otherwise retries failed tasks whatever `max_retries` says (the first run of this step made two
+attempts). Evidence: `docs/screenshots/failed_run.png` and `failure_email.png`.
 
 ## 6. Delta evidence
 
@@ -127,37 +127,44 @@ with `python scripts/upload_drop.py --drop-date <D1> ...`.
 databricks bundle run lakehouse_delta_evidence -t dev
 ```
 
-It writes `state/reports/delta_evidence.json`: row counts by version, schema enforcement and
-evolution, OPTIMIZE file counts and query timings, VACUUM.
+It writes `state/reports/delta_evidence.json`: row counts by version (time travel), schema
+enforcement (an extra column without `mergeSchema`, plus how strings written to a DOUBLE column
+are treated), schema evolution, bronze's commit history including automatic compactions,
+OPTIMIZE on a scratch table with auto-compaction off, and VACUUM.
 
 ## 7. Governance
 
-- `docs_and_tags` has already applied the comments, plus tags if supported. Its log lists anything that failed.
-- Open `lakehouse_gold.fact_price_daily_consensus` in Catalog Explorer, then Lineage.
-  Evidence: a screenshot of the lineage graph.
+- `docs_and_tags` has already applied the comments and tags. Its log lists anything that failed.
+- Open `lakehouse_lab.lakehouse_gold.fact_price_daily_consensus` in Catalog Explorer, then
+  Lineage > See lineage graph. Evidence: `docs/screenshots/lineage.png`.
 
 ## 8. Optional: declarative pipeline
 
-Only if the Day 0 pipeline check passed:
+The `dev_pipeline` target adds the pipeline (the same quality rules as expectations), publishes
+its event log to `lakehouse_ops.dq_pipeline_event_log`, and adds `lakehouse_dq_evidence`, which
+runs the pipeline and then writes the expectation counts to `state/reports/pipeline_expectations.json`:
 
 ```powershell
 databricks bundle deploy -t dev_pipeline
+databricks bundle run lakehouse_dq_evidence -t dev_pipeline
+databricks bundle destroy -t dev_pipeline
 ```
 
-Start `lakehouse-dq-expectations` in the UI. Evidence: a screenshot of the expectations tab
-showing pass and fail counts. Free Edition allows one active pipeline per type, so stop it afterwards.
+The target also deploys copies of the three jobs, which the destroy removes. Always pass
+`-t dev_pipeline` to destroy: without it the CLI destroys the default `dev` target. Free Edition
+allows one active pipeline per type, so destroy it when done.
 
 ## 9. Collect results for the README
 
 ```powershell
-databricks fs cp -r dbfs:/Volumes/workspace/lakehouse_ops/state/reports .\outputs\reports
+databricks fs cp -r dbfs:/Volumes/lakehouse_lab/lakehouse_ops/state/reports .\outputs\reports --overwrite
 python scripts\render_results.py .\outputs\reports | Out-File -Encoding utf8 .\outputs\results.md
 ```
 
-Paste `results.md` into the README's Results section and the probe table into Platform.
-Put the screenshots in `docs/screenshots/`.
+`outputs/reports` is gitignored (raw CLI output can carry account details). Paste `results.md`
+into the README's Results section and the probe table into Platform.
 
 ## Teardown
 
-`databricks bundle destroy -t dev` removes the jobs. Drop the schemas with
-`DROP SCHEMA workspace.lakehouse_<layer> CASCADE` if you want the workspace clean.
+`databricks bundle destroy -t dev` removes the jobs. `DROP CATALOG lakehouse_lab CASCADE`
+removes every table and volume.

@@ -13,4 +13,6 @@ derby.log
 # Exported snapshot data is uploaded to a Unity Catalog volume, never committed.
 landing/
 outputs/local/
+# Raw CLI output (run JSON, event logs) carries account e-mail and workspace URLs.
+outputs/reports/
 .env
