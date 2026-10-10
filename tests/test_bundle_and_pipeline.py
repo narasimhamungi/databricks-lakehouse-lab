@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import ast
 import os
+import re
 
 import yaml
 
@@ -53,6 +54,17 @@ def test_every_task_points_at_an_existing_entry_point_with_shared_args():
             assert "--src-root=${workspace.file_path}/src" in params
             seen.add(tuple(params))
     assert len(seen) == 1  # one shared argument list (YAML anchor)
+
+
+def test_every_referenced_job_parameter_is_declared_on_its_job():
+    # The Jobs API rejects {{job.parameters.X}} when the job has no parameter X
+    # (400 INVALID_PARAMETER_VALUE at deploy); the CLI's schema check does not.
+    for key, job in _bundle()["resources"]["jobs"].items():
+        declared = {p["name"] for p in job.get("parameters", [])}
+        for t in job["tasks"]:
+            for arg in t["spark_python_task"]["parameters"]:
+                for ref in re.findall(r"\{\{job\.parameters\.(\w+)\}\}", arg):
+                    assert ref in declared, f"{key}.{t['task_key']} references undeclared job parameter {ref}"
 
 
 def test_pipeline_only_in_its_own_target():

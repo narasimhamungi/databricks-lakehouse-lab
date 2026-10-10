@@ -26,7 +26,10 @@ resources:
       name: lakehouse-daily
       description: verify_manifest -> bronze -> silver -> gold -> docs_and_tags -> dq_report
       max_concurrent_runs: 1
-      parameters:
+      # Every job declares run_date because the shared task arguments below
+      # reference it; the Jobs API rejects a reference to an undefined job
+      # parameter (setup and delta_evidence ignore it).
+      parameters: &job_params
         - name: run_date
           default: ""
       email_notifications:
@@ -102,6 +105,7 @@ resources:
     lakehouse_setup:
       name: lakehouse-setup
       description: One-time - create the schemas and the landing/state volumes.
+      parameters: *job_params
       environments:
         - environment_key: default
           spec:
@@ -116,6 +120,7 @@ resources:
     lakehouse_delta_evidence:
       name: lakehouse-delta-evidence
       description: Manual - time travel, schema enforcement and evolution, OPTIMIZE and VACUUM on the built tables.
+      parameters: *job_params
       environments:
         - environment_key: default
           spec:
