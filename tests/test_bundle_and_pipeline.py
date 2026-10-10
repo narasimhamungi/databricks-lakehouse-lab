@@ -86,10 +86,11 @@ def test_pipeline_only_in_its_own_target():
     assert os.path.isfile(os.path.join(ROOT, pipe["libraries"][0]["file"]["path"]))
 
 
-def test_pipeline_publishes_its_event_log_and_a_job_reads_it_after_the_run():
+def test_dq_evidence_job_runs_the_pipeline_then_reads_its_event_log():
     res = _bundle()["targets"]["dev_pipeline"]["resources"]
-    log = res["pipelines"]["lakehouse_dq_expectations"]["event_log"]
-    assert log == {"catalog": "${var.catalog}", "schema": "${var.schema_prefix}ops", "name": "dq_pipeline_event_log"}
+    # No published event-log table: it would outlive a destroyed pipeline and
+    # block the next deploy (TABLE_OR_VIEW_ALREADY_EXISTS).
+    assert "event_log" not in res["pipelines"]["lakehouse_dq_expectations"]
     tasks = {t["task_key"]: t for t in res["jobs"]["lakehouse_dq_evidence"]["tasks"]}
     pipeline_id = tasks["run_pipeline"]["pipeline_task"]["pipeline_id"]
     assert pipeline_id == "${resources.pipelines.lakehouse_dq_expectations.id}"

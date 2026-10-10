@@ -130,6 +130,7 @@ def test_render_delta_evidence_cases_and_compaction():
     out = render_results._compaction_lines({"bronze_history": hist, "compaction_demo": demo})
     assert out == [
         "- Bronze history: 2 commits, 1 of them automatic compactions (auto=true).",
+        "  - OPTIMIZE v?: removed None files, added None.",
         "- OPTIMIZE with auto-compaction off (8 single-row appends): 8 files -> 1.",
     ]
 
@@ -147,3 +148,20 @@ def test_render_pipeline_expectations():
     out = render_results._pipeline_lines(pe)
     assert "| dq_yfinance_prices_checked | close_positive | 699,775 | 0 |" in out
     assert out[-1] == "\nRows dropped by expect_or_drop: dq_yfinance_prices_checked 0."
+
+
+def test_render_names_who_ran_each_optimize():
+    hist = [
+        {
+            "version": 9,
+            "operation": "OPTIMIZE",
+            "auto": "false",
+            "timestamp": "2026-10-10 13:40:00",
+            "user": "System-User",
+            "files_added": "1",
+            "files_removed": "3",
+        },
+    ]
+    out = render_results._compaction_lines({"bronze_history": hist, "predictive_optimization": "ENABLE"})
+    assert "  - OPTIMIZE v9 at 2026-10-10 13:40:00 by System-User: removed 3 files, added 1." in out
+    assert out[-1] == "- Predictive optimization on the bronze schema: ENABLE."

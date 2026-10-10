@@ -163,15 +163,9 @@ targets:
             lakehouse.catalog: ${var.catalog}
             lakehouse.schema_prefix: ${var.schema_prefix}
             lakehouse.src_root: ${workspace.file_path}/src
-          # Publish the event log as a Unity Catalog table so the expectation
-          # counts can be read (and kept) after the run.
-          event_log:
-            catalog: ${var.catalog}
-            schema: ${var.schema_prefix}ops
-            name: dq_pipeline_event_log
       jobs:
-        # Runs the pipeline, then reads its event log into
-        # state/reports/pipeline_expectations.json.
+        # Runs the pipeline, then reads its event log (event_log() on one of
+        # its materialized views) into state/reports/pipeline_expectations.json.
         lakehouse_dq_evidence:
           name: lakehouse-dq-evidence
           parameters: *job_params
@@ -183,7 +177,6 @@ targets:
             - task_key: run_pipeline
               pipeline_task:
                 pipeline_id: ${resources.pipelines.lakehouse_dq_expectations.id}
-                full_refresh: true
             - task_key: pipeline_evidence
               depends_on: [{ task_key: run_pipeline }]
               environment_key: default

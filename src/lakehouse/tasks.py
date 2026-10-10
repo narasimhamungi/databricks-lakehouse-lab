@@ -695,7 +695,7 @@ def _history_summary(spark: SparkSession, table: str) -> list[dict]:
     (auto-compaction), and the files it added and removed."""
     rows = (
         spark.sql(f"DESCRIBE HISTORY {table}")
-        .select("version", "operation", "operationParameters", "operationMetrics")
+        .select("version", "timestamp", "userName", "operation", "operationParameters", "operationMetrics")
         .collect()
     )
     out = []
@@ -704,6 +704,8 @@ def _history_summary(spark: SparkSession, table: str) -> list[dict]:
         out.append(
             {
                 "version": int(h["version"]),
+                "timestamp": str(h["timestamp"]),
+                "user": h["userName"],
                 "operation": h["operation"],
                 "auto": params.get("auto"),
                 "files_added": metrics.get("numAddedFiles") or metrics.get("numFiles"),
@@ -711,6 +713,20 @@ def _history_summary(spark: SparkSession, table: str) -> list[dict]:
             }
         )
     return out
+
+
+def _predictive_optimization(spark: SparkSession, schema: str) -> str | None:
+    """The schema's predictive-optimization setting as Databricks reports it
+    (e.g. 'ENABLE (inherited from METASTORE ...)'); None where not reported."""
+    try:
+        rows = spark.sql(f"DESCRIBE SCHEMA EXTENDED {schema}").collect()
+    except Exception:  # noqa: BLE001 - not available on open-source Spark
+        return None
+    for r in rows:
+        values = list(r.asDict().values())
+        if values and "predictive" in str(values[0]).lower():
+            return str(values[1]) if len(values) > 1 else None
+    return None
 
 
 def _compaction_demo(spark: SparkSession, table: str, appends: int = 8) -> dict:
@@ -807,6 +823,7 @@ def delta_evidence(spark: SparkSession, ctx: RunContext) -> dict:
         "query_seconds_after": t_after,
         "note": "three runs each; first runs include cache warm-up",
         "bronze_history": _history_summary(spark, bronze_t),
+        "predictive_optimization": _predictive_optimization(spark, cfg.schema("bronze")),
         "compaction_demo": _compaction_demo(spark, cfg.table("ops", "evidence_compaction_demo")),
     }
     try:
@@ -826,7 +843,39 @@ def delta_evidence(spark: SparkSession, ctx: RunContext) -> dict:
     return ev
 
 
-PIPELINE_EVENT_LOG = "dq_pipeline_event_log"
+# A materialized view the declarative pipeline publishes; event_log(TABLE(..))
+# on it returns the whole pipeline's event log without a separate log table.
+PIPELINE_ANCHOR_VIEW = "dq_yfinance_prices_checked"
+
+
+def _as_dict(value) -> dict:
+    """event_log() returns origin/details as JSON strings or structs depending
+    on the runtime; accept either."""
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        return json.loads(value) if value else {}
+    if isinstance(value, dict):
+        return value
+    return value.asDict(recursive=True)
+
+
+def event_rows(rows: list) -> list[dict]:
+    """Normalise event_log() rows to the dicts summarise_expectations reads."""
+    out = []
+    for r in rows:
+        r = r if isinstance(r, dict) else r.asDict(recursive=True)
+        origin = _as_dict(r.get("origin"))
+        out.append(
+            {
+                "event_type": r.get("event_type"),
+                "update_id": origin.get("update_id"),
+                "flow_name": origin.get("flow_name"),
+                "timestamp": r.get("timestamp"),
+                "details": _as_dict(r.get("details")),
+            }
+        )
+    return out
 
 
 def summarise_expectations(events: list[dict]) -> dict:
@@ -863,18 +912,19 @@ def summarise_expectations(events: list[dict]) -> dict:
 
 
 def pipeline_evidence(spark: SparkSession, ctx: RunContext) -> dict:
-    """Read the declarative pipeline's published event log and write the
-    expectation counts of its latest update to pipeline_expectations.json.
-    Fails if the log holds no expectation results, so a silent pass is
-    impossible."""
-    log_t = ctx.cfg.table("ops", PIPELINE_EVENT_LOG)
-    rows = spark.sql(
-        f"SELECT event_type, origin.update_id AS update_id, origin.flow_name AS flow_name, timestamp, details "
-        f"FROM {log_t}"
-    ).collect()
-    summary = summarise_expectations([r.asDict(recursive=True) for r in rows])
+    """Read the declarative pipeline's event log through one of its
+    materialized views and write the expectation counts of the latest update
+    to pipeline_expectations.json. Fails if there are none, so a silent pass
+    is impossible.
+
+    The pipeline does not publish its log to a named table: a published log
+    outlives the pipeline when the dev_pipeline target is destroyed, and the
+    next deploy (a new pipeline id) then fails with TABLE_OR_VIEW_ALREADY_EXISTS."""
+    view = ctx.cfg.table("ops", PIPELINE_ANCHOR_VIEW)
+    rows = spark.sql(f"SELECT event_type, origin, timestamp, details FROM event_log(TABLE({view}))").collect()
+    summary = summarise_expectations(event_rows(rows))
     if not summary["flows"]:
-        raise RuntimeError(f"no expectation results for the latest update in {log_t}")
+        raise RuntimeError(f"no expectation results for the latest update in the event log of {view}")
     path = _write_report(ctx, "pipeline_expectations.json", summary)
     ctx.say(json.dumps(summary, indent=2, default=str))
     ctx.say(f"pipeline expectations written to {path}")

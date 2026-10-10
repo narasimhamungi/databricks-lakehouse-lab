@@ -140,9 +140,12 @@ OPTIMIZE on a scratch table with auto-compaction off, and VACUUM.
 
 ## 8. Optional: declarative pipeline
 
-The `dev_pipeline` target adds the pipeline (the same quality rules as expectations), publishes
-its event log to `lakehouse_ops.dq_pipeline_event_log`, and adds `lakehouse_dq_evidence`, which
-runs the pipeline and then writes the expectation counts to `state/reports/pipeline_expectations.json`:
+The `dev_pipeline` target adds the pipeline (the same quality rules as expectations) and
+`lakehouse_dq_evidence`, which runs the pipeline, reads its event log with
+`event_log(TABLE(<one of its materialized views>))`, and writes the expectation counts to
+`state/reports/pipeline_expectations.json`. The pipeline deliberately does not publish its event log
+to a named table: that table outlives a destroyed pipeline and makes the next deploy fail with
+`TABLE_OR_VIEW_ALREADY_EXISTS`.
 
 ```powershell
 databricks bundle deploy -t dev_pipeline

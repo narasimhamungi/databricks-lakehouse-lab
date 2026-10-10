@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 
-from lakehouse.tasks import summarise_expectations
+from lakehouse.tasks import event_rows, summarise_expectations
 
 
 def _dq(passed, failed, dropped=0, name="ohlc_ordered"):
@@ -58,3 +58,16 @@ def test_no_data_quality_gives_no_flows():
         _progress("u", "yf", "COMPLETED", None, "2"),
     ]
     assert summarise_expectations(events)["flows"] == {}
+
+
+def test_event_rows_accept_json_strings_and_structs():
+    as_strings = {
+        "event_type": "flow_progress",
+        "origin": json.dumps({"update_id": "u", "flow_name": "c.s.v"}),
+        "timestamp": "2",
+        "details": json.dumps({"flow_progress": {"status": "COMPLETED"}}),
+    }
+    as_structs = dict(as_strings, origin={"update_id": "u", "flow_name": "c.s.v"}, details=None)
+    a, b = event_rows([as_strings, as_structs])
+    assert (a["update_id"], a["flow_name"], a["details"]["flow_progress"]["status"]) == ("u", "c.s.v", "COMPLETED")
+    assert (b["update_id"], b["details"]) == ("u", {})

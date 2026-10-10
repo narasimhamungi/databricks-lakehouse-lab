@@ -161,6 +161,15 @@ def _compaction_lines(opt: dict) -> list[str]:
     auto = [h for h in hist if h["operation"] == "OPTIMIZE" and str(h.get("auto")).lower() == "true"]
     if hist:
         out.append(f"- Bronze history: {len(hist)} commits, {len(auto)} of them automatic compactions (auto=true).")
+        for h in hist:
+            if h["operation"] == "OPTIMIZE":
+                who = f" at {h['timestamp']} by {h['user']}" if h.get("timestamp") else ""
+                out.append(
+                    f"  - OPTIMIZE v{h.get('version', '?')}{who}: removed {h.get('files_removed')} files, "
+                    f"added {h.get('files_added')}."
+                )
+    if opt.get("predictive_optimization"):
+        out.append(f"- Predictive optimization on the bronze schema: {opt['predictive_optimization']}.")
     demo = opt.get("compaction_demo") or {}
     if "files_before" in demo:
         out.append(
