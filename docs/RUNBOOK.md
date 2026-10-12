@@ -140,22 +140,21 @@ OPTIMIZE on a scratch table with auto-compaction off, and VACUUM.
 
 ## 8. Optional: declarative pipeline
 
-The `dev_pipeline` target adds the pipeline (the same quality rules as expectations) and
-`lakehouse_dq_evidence`, which runs the pipeline, reads its event log with
-`event_log(TABLE(<one of its materialized views>))`, and writes the expectation counts to
-`state/reports/pipeline_expectations.json`. The pipeline deliberately does not publish its event log
-to a named table: that table outlives a destroyed pipeline and makes the next deploy fail with
-`TABLE_OR_VIEW_ALREADY_EXISTS`.
+The `dev_pipeline` target holds only the pipeline (the same quality rules, as expectations) and
+`lakehouse_dq_evidence`, which reads the pipeline's event log with
+`event_log(TABLE(<one of its materialized views>))` and writes the expectation counts to
+`state/reports/pipeline_expectations.json`:
 
 ```powershell
-databricks bundle deploy -t dev_pipeline
+databricks bundle deploy -t dev_pipeline --auto-approve
+databricks bundle run lakehouse_dq_expectations -t dev_pipeline
 databricks bundle run lakehouse_dq_evidence -t dev_pipeline
-databricks bundle destroy -t dev_pipeline
 ```
 
-The target also deploys copies of the three jobs, which the destroy removes. Always pass
-`-t dev_pipeline` to destroy: without it the CLI destroys the default `dev` target. Free Edition
-allows one active pipeline per type, so destroy it when done.
+Keep the target deployed. Destroying it deletes the pipeline but leaves its materialized views
+behind, still owned by the deleted pipeline, and any later pipeline fails with
+"Table ... is already managed by pipeline <id>". Free Edition allows one active pipeline per type;
+a triggered pipeline that is not running does not count.
 
 ## 9. Collect results for the README
 
@@ -169,5 +168,11 @@ into the README's Results section and the probe table into Platform.
 
 ## Teardown
 
-`databricks bundle destroy -t dev` removes the jobs. `DROP CATALOG lakehouse_lab CASCADE`
-removes every table and volume.
+`databricks bundle destroy -t dev` and `databricks bundle destroy -t dev_pipeline` remove the jobs
+and the pipeline. Then drop the pipeline's leftover views (or everything at once with
+`DROP CATALOG lakehouse_lab CASCADE`):
+
+```sql
+DROP MATERIALIZED VIEW IF EXISTS lakehouse_lab.lakehouse_ops.dq_yfinance_expectations;
+DROP MATERIALIZED VIEW IF EXISTS lakehouse_lab.lakehouse_ops.dq_tiingo_expectations;
+```

@@ -690,12 +690,21 @@ def _try_append(df: DataFrame, table: str) -> dict:
         return {"rejected": True, "error": type(exc).__name__ + ": " + str(exc).splitlines()[0][:200]}
 
 
+def _job_name(job) -> str | None:
+    """DESCRIBE HISTORY's job column: which job wrote the commit (e.g.
+    'Predictive Optimization Job-...'); None for interactive writes."""
+    if job is None:
+        return None
+    job = job if isinstance(job, dict) else job.asDict()
+    return job.get("jobName")
+
+
 def _history_summary(spark: SparkSession, table: str) -> list[dict]:
     """Each commit's operation, whether Databricks ran it automatically
     (auto-compaction), and the files it added and removed."""
     rows = (
         spark.sql(f"DESCRIBE HISTORY {table}")
-        .select("version", "timestamp", "userName", "operation", "operationParameters", "operationMetrics")
+        .select("version", "timestamp", "userName", "job", "operation", "operationParameters", "operationMetrics")
         .collect()
     )
     out = []
@@ -706,6 +715,7 @@ def _history_summary(spark: SparkSession, table: str) -> list[dict]:
                 "version": int(h["version"]),
                 "timestamp": str(h["timestamp"]),
                 "user": h["userName"],
+                "job": _job_name(h["job"]),
                 "operation": h["operation"],
                 "auto": params.get("auto"),
                 "files_added": metrics.get("numAddedFiles") or metrics.get("numFiles"),
@@ -756,11 +766,18 @@ def delta_evidence(spark: SparkSession, ctx: RunContext) -> dict:
     ev: dict = {}
 
     silver_t = cfg.table("silver", "prices_yfinance")
-    hist = spark.sql(f"DESCRIBE HISTORY {silver_t}").select("version", "operation", "operationMetrics").collect()
+    hist = (
+        spark.sql(f"DESCRIBE HISTORY {silver_t}")
+        .select("version", "timestamp", "userName", "job", "operation", "operationMetrics")
+        .collect()
+    )
     versions = sorted(int(h["version"]) for h in hist)
     ev["history"] = [
         {
             "version": int(h["version"]),
+            "timestamp": str(h["timestamp"]),
+            "user": h["userName"],
+            "job": _job_name(h["job"]),
             "operation": h["operation"],
             "inserted": (h["operationMetrics"] or {}).get("numTargetRowsInserted"),
             "updated": (h["operationMetrics"] or {}).get("numTargetRowsUpdated"),
@@ -845,7 +862,7 @@ def delta_evidence(spark: SparkSession, ctx: RunContext) -> dict:
 
 # A materialized view the declarative pipeline publishes; event_log(TABLE(..))
 # on it returns the whole pipeline's event log without a separate log table.
-PIPELINE_ANCHOR_VIEW = "dq_yfinance_prices_checked"
+PIPELINE_ANCHOR_VIEW = "dq_yfinance_expectations"
 
 
 def _as_dict(value) -> dict:
@@ -919,7 +936,9 @@ def pipeline_evidence(spark: SparkSession, ctx: RunContext) -> dict:
 
     The pipeline does not publish its log to a named table: a published log
     outlives the pipeline when the dev_pipeline target is destroyed, and the
-    next deploy (a new pipeline id) then fails with TABLE_OR_VIEW_ALREADY_EXISTS."""
+    next deploy (a new pipeline id) then fails with TABLE_OR_VIEW_ALREADY_EXISTS.
+    Its materialized views outlive it the same way ("already managed by
+    pipeline <id>"), which is why the dev_pipeline target is kept deployed."""
     view = ctx.cfg.table("ops", PIPELINE_ANCHOR_VIEW)
     rows = spark.sql(f"SELECT event_type, origin, timestamp, details FROM event_log(TABLE({view}))").collect()
     summary = summarise_expectations(event_rows(rows))

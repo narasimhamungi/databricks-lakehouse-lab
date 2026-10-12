@@ -22,131 +22,135 @@ variables:
     description: Who gets the failure email.
     default: ${workspace.current_user.userName}
 
-resources:
-  jobs:
-    lakehouse_daily:
-      name: lakehouse-daily
-      description: verify_manifest -> bronze -> silver -> gold -> docs_and_tags -> dq_report
-      max_concurrent_runs: 1
-      # Every job declares run_date because the shared task arguments below
-      # reference it; the Jobs API rejects a reference to an undefined job
-      # parameter (setup and delta_evidence ignore it).
-      parameters: &job_params
-        - name: run_date
-          default: ""
-      email_notifications:
-        on_failure:
-          - ${var.failure_email}
-      environments:
-        - environment_key: default
-          spec:
-            environment_version: "2"
-      tasks:
-        # Deterministic checks get no retries: re-running a hash mismatch or a
-        # failed quality gate only delays the alert. max_retries: 0 is not
-        # enough on serverless: auto-optimization retries failed tasks unless
-        # it is disabled per task (seen on the first deliberate failure: two
-        # attempts of verify_manifest).
-        - task_key: verify_manifest
-          environment_key: default
-          max_retries: 0
-          disable_auto_optimization: true
-          spark_python_task:
-            python_file: ./jobs/verify_manifest.py
-            # Shared by every task (YAML anchor). --src-root lets jobs/*.py
-            # import src/lakehouse from the synced bundle files, so no wheel
-            # has to be built or cached.
-            parameters: &task_args
-              - "--catalog=${var.catalog}"
-              - "--schema-prefix=${var.schema_prefix}"
-              - "--ingest-mode=${var.ingest_mode}"
-              - "--run-date={{job.parameters.run_date}}"
-              - "--run-id={{job.run_id}}"
-              - "--src-root=${workspace.file_path}/src"
-
-        - task_key: bronze
-          depends_on: [{ task_key: verify_manifest }]
-          environment_key: default
-          max_retries: 2
-          min_retry_interval_millis: 60000
-          spark_python_task:
-            python_file: ./jobs/bronze.py
-            parameters: *task_args
-
-        - task_key: silver
-          depends_on: [{ task_key: bronze }]
-          environment_key: default
-          max_retries: 2
-          min_retry_interval_millis: 60000
-          spark_python_task:
-            python_file: ./jobs/silver.py
-            parameters: *task_args
-
-        - task_key: gold
-          depends_on: [{ task_key: silver }]
-          environment_key: default
-          max_retries: 2
-          min_retry_interval_millis: 60000
-          spark_python_task:
-            python_file: ./jobs/gold.py
-            parameters: *task_args
-
-        - task_key: docs_and_tags
-          depends_on: [{ task_key: gold }]
-          environment_key: default
-          max_retries: 2
-          min_retry_interval_millis: 60000
-          spark_python_task:
-            python_file: ./jobs/docs_and_tags.py
-            parameters: *task_args
-
-        - task_key: dq_report
-          depends_on: [{ task_key: docs_and_tags }]
-          environment_key: default
-          max_retries: 0
-          disable_auto_optimization: true
-          spark_python_task:
-            python_file: ./jobs/dq_report.py
-            parameters: *task_args
-
-    lakehouse_setup:
-      name: lakehouse-setup
-      description: One-time - create the schemas and the landing/state volumes.
-      parameters: *job_params
-      environments:
-        - environment_key: default
-          spec:
-            environment_version: "2"
-      tasks:
-        - task_key: setup
-          environment_key: default
-          spark_python_task:
-            python_file: ./jobs/setup.py
-            parameters: *task_args
-
-    lakehouse_delta_evidence:
-      name: lakehouse-delta-evidence
-      description: Manual - time travel, schema enforcement and evolution, OPTIMIZE and VACUUM on the built tables.
-      parameters: *job_params
-      environments:
-        - environment_key: default
-          spec:
-            environment_version: "2"
-      tasks:
-        - task_key: delta_evidence
-          environment_key: default
-          spark_python_task:
-            python_file: ./jobs/delta_evidence.py
-            parameters: *task_args
-
 targets:
+  # The workflow jobs. They live in the dev target (not top-level resources)
+  # so the optional dev_pipeline target below deploys only the pipeline,
+  # not a second copy of every job.
   dev:
     mode: development
     default: true
+    resources:
+      jobs:
+        lakehouse_daily:
+          name: lakehouse-daily
+          description: verify_manifest -> bronze -> silver -> gold -> docs_and_tags -> dq_report
+          max_concurrent_runs: 1
+          # Every job declares run_date because the shared task arguments below
+          # reference it; the Jobs API rejects a reference to an undefined job
+          # parameter (setup and delta_evidence ignore it).
+          parameters: &job_params
+            - name: run_date
+              default: ""
+          email_notifications:
+            on_failure:
+              - ${var.failure_email}
+          environments:
+            - environment_key: default
+              spec:
+                environment_version: "2"
+          tasks:
+            # Deterministic checks get no retries: re-running a hash mismatch or a
+            # failed quality gate only delays the alert. max_retries: 0 is not
+            # enough on serverless: auto-optimization retries failed tasks unless
+            # it is disabled per task (seen on the first deliberate failure: two
+            # attempts of verify_manifest).
+            - task_key: verify_manifest
+              environment_key: default
+              max_retries: 0
+              disable_auto_optimization: true
+              spark_python_task:
+                python_file: ./jobs/verify_manifest.py
+                # Shared by every task (YAML anchor). --src-root lets jobs/*.py
+                # import src/lakehouse from the synced bundle files, so no wheel
+                # has to be built or cached.
+                parameters: &task_args
+                  - "--catalog=${var.catalog}"
+                  - "--schema-prefix=${var.schema_prefix}"
+                  - "--ingest-mode=${var.ingest_mode}"
+                  - "--run-date={{job.parameters.run_date}}"
+                  - "--run-id={{job.run_id}}"
+                  - "--src-root=${workspace.file_path}/src"
 
-  # Same as dev plus the declarative-pipeline version of the quality rules.
-  # Separate because Free Edition allows one active pipeline per type and the
-  # Day 0 probe has to confirm pipelines run before anything depends on them.
+            - task_key: bronze
+              depends_on: [{ task_key: verify_manifest }]
+              environment_key: default
+              max_retries: 2
+              min_retry_interval_millis: 60000
+              spark_python_task:
+                python_file: ./jobs/bronze.py
+                parameters: *task_args
+
+            - task_key: silver
+              depends_on: [{ task_key: bronze }]
+              environment_key: default
+              max_retries: 2
+              min_retry_interval_millis: 60000
+              spark_python_task:
+                python_file: ./jobs/silver.py
+                parameters: *task_args
+
+            - task_key: gold
+              depends_on: [{ task_key: silver }]
+              environment_key: default
+              max_retries: 2
+              min_retry_interval_millis: 60000
+              spark_python_task:
+                python_file: ./jobs/gold.py
+                parameters: *task_args
+
+            - task_key: docs_and_tags
+              depends_on: [{ task_key: gold }]
+              environment_key: default
+              max_retries: 2
+              min_retry_interval_millis: 60000
+              spark_python_task:
+                python_file: ./jobs/docs_and_tags.py
+                parameters: *task_args
+
+            - task_key: dq_report
+              depends_on: [{ task_key: docs_and_tags }]
+              environment_key: default
+              max_retries: 0
+              disable_auto_optimization: true
+              spark_python_task:
+                python_file: ./jobs/dq_report.py
+                parameters: *task_args
+
+        lakehouse_setup:
+          name: lakehouse-setup
+          description: One-time - create the schemas and the landing/state volumes.
+          parameters: *job_params
+          environments:
+            - environment_key: default
+              spec:
+                environment_version: "2"
+          tasks:
+            - task_key: setup
+              environment_key: default
+              spark_python_task:
+                python_file: ./jobs/setup.py
+                parameters: *task_args
+
+        lakehouse_delta_evidence:
+          name: lakehouse-delta-evidence
+          description: Manual - time travel, schema enforcement and evolution, OPTIMIZE and VACUUM on the built tables.
+          parameters: *job_params
+          environments:
+            - environment_key: default
+              spec:
+                environment_version: "2"
+          tasks:
+            - task_key: delta_evidence
+              environment_key: default
+              spark_python_task:
+                python_file: ./jobs/delta_evidence.py
+                parameters: *task_args
+
+  # Optional: the declarative-pipeline version of the quality rules and a job
+  # that reads its expectation counts. Deploy once and keep it: destroying the
+  # pipeline leaves its materialized views behind, still owned by the deleted
+  # pipeline, and the next pipeline then fails with "already managed by
+  # pipeline <id>" (drop them first; see docs/RUNBOOK.md).
   dev_pipeline:
     mode: development
     resources:
@@ -164,8 +168,12 @@ targets:
             lakehouse.schema_prefix: ${var.schema_prefix}
             lakehouse.src_root: ${workspace.file_path}/src
       jobs:
-        # Runs the pipeline, then reads its event log (event_log() on one of
-        # its materialized views) into state/reports/pipeline_expectations.json.
+        # Reads the pipeline's event log (event_log() on one of its materialized
+        # views) into state/reports/pipeline_expectations.json. Run it after
+        # `bundle run lakehouse_dq_expectations`; the pipeline is run from the
+        # CLI rather than as a job task because a failing pipeline task was
+        # retried by serverless auto-optimization for 12 minutes, while the CLI
+        # run fails in about a minute and prints the pipeline's error.
         lakehouse_dq_evidence:
           name: lakehouse-dq-evidence
           parameters: *job_params
@@ -174,12 +182,10 @@ targets:
               spec:
                 environment_version: "2"
           tasks:
-            - task_key: run_pipeline
-              pipeline_task:
-                pipeline_id: ${resources.pipelines.lakehouse_dq_expectations.id}
             - task_key: pipeline_evidence
-              depends_on: [{ task_key: run_pipeline }]
               environment_key: default
+              max_retries: 0
+              disable_auto_optimization: true
               spark_python_task:
                 python_file: ./jobs/pipeline_evidence.py
                 parameters: *task_args

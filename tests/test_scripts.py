@@ -165,3 +165,18 @@ def test_render_names_who_ran_each_optimize():
     out = render_results._compaction_lines({"bronze_history": hist, "predictive_optimization": "ENABLE"})
     assert "  - OPTIMIZE v9 at 2026-10-10 13:40:00 by System-User: removed 3 files, added 1." in out
     assert out[-1] == "- Predictive optimization on the bronze schema: ENABLE."
+
+
+def test_render_maintenance_by_predictive_optimization():
+    hist = [
+        {"version": 12, "operation": "SET TBLPROPERTIES", "job": "[dev x] lakehouse-daily"},
+        {
+            "version": 13,
+            "operation": "OPTIMIZE",
+            "timestamp": "2026-10-10 15:07:08",
+            "job": "Predictive Optimization Job-1",
+        },
+    ]
+    assert render_results._maintenance_lines(hist) == [
+        "- Silver yfinance OPTIMIZE v13 at 2026-10-10 15:07:08 by job Predictive Optimization Job-1."
+    ]

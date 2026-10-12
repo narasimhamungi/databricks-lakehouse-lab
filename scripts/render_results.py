@@ -117,6 +117,7 @@ def render(report_dir: str) -> str:
             f"Query seconds before {opt['query_seconds_before']}, after {opt['query_seconds_after']} "
             f"({opt['note']}).",
             *_compaction_lines(opt),
+            *_maintenance_lines(ev.get("history") or []),
             f"- VACUUM: {ev.get('vacuum')}.",
         ]
     pe_path = os.path.join(report_dir, "pipeline_expectations.json")
@@ -155,6 +156,16 @@ def _enforcement_lines(se: dict) -> list[str]:
     return out
 
 
+def _maintenance_lines(silver_history: list[dict]) -> list[str]:
+    """OPTIMIZE commits on silver yfinance that no task of ours runs, with the
+    job that wrote them (predictive optimization shows up here)."""
+    return [
+        f"- Silver yfinance OPTIMIZE v{h['version']} at {h.get('timestamp')} by job {h['job']}."
+        for h in silver_history
+        if h.get("operation") == "OPTIMIZE" and h.get("job")
+    ]
+
+
 def _compaction_lines(opt: dict) -> list[str]:
     out = []
     hist = opt.get("bronze_history") or []
@@ -164,6 +175,7 @@ def _compaction_lines(opt: dict) -> list[str]:
         for h in hist:
             if h["operation"] == "OPTIMIZE":
                 who = f" at {h['timestamp']} by {h['user']}" if h.get("timestamp") else ""
+                who += f" (job: {h['job']})" if h.get("job") else ""
                 out.append(
                     f"  - OPTIMIZE v{h.get('version', '?')}{who}: removed {h.get('files_removed')} files, "
                     f"added {h.get('files_added')}."

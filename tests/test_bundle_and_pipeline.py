@@ -18,8 +18,12 @@ def _bundle():
         return yaml.safe_load(fh)
 
 
+def _dev_jobs():
+    return _bundle()["targets"]["dev"]["resources"]["jobs"]
+
+
 def _daily():
-    return _bundle()["resources"]["jobs"]["lakehouse_daily"]
+    return _dev_jobs()["lakehouse_daily"]
 
 
 def test_daily_job_runs_the_tasks_in_order():
@@ -52,7 +56,7 @@ def test_failure_email_and_run_date_parameter():
 def test_every_task_points_at_an_existing_entry_point_with_shared_args():
     bundle = _bundle()
     seen = set()
-    for job in bundle["resources"]["jobs"].values():
+    for job in bundle["targets"]["dev"]["resources"]["jobs"].values():
         for t in job["tasks"]:
             spt = t["spark_python_task"]
             assert os.path.isfile(os.path.join(ROOT, spt["python_file"])), spt["python_file"]
@@ -67,7 +71,7 @@ def test_every_referenced_job_parameter_is_declared_on_its_job():
     # The Jobs API rejects {{job.parameters.X}} when the job has no parameter X
     # (400 INVALID_PARAMETER_VALUE at deploy); the CLI's schema check does not.
     bundle = _bundle()
-    jobs = dict(bundle["resources"]["jobs"])
+    jobs = dict((bundle.get("resources") or {}).get("jobs") or {})
     for target in bundle["targets"].values():
         jobs.update((target.get("resources") or {}).get("jobs") or {})
     for key, job in jobs.items():
@@ -78,24 +82,33 @@ def test_every_referenced_job_parameter_is_declared_on_its_job():
                     assert ref in declared, f"{key}.{t['task_key']} references undeclared job parameter {ref}"
 
 
-def test_pipeline_only_in_its_own_target():
+def test_jobs_in_dev_and_only_the_pipeline_in_dev_pipeline():
     bundle = _bundle()
-    assert "pipelines" not in bundle["resources"]
-    pipe = bundle["targets"]["dev_pipeline"]["resources"]["pipelines"]["lakehouse_dq_expectations"]
+    assert "resources" not in bundle  # nothing deploys to every target
+    assert "pipelines" not in bundle["targets"]["dev"]["resources"]
+    res = bundle["targets"]["dev_pipeline"]["resources"]
+    assert set(res["jobs"]) == {"lakehouse_dq_evidence"}  # no second copy of the workflow jobs
+    pipe = res["pipelines"]["lakehouse_dq_expectations"]
     assert pipe["serverless"] is True
     assert os.path.isfile(os.path.join(ROOT, pipe["libraries"][0]["file"]["path"]))
+    # No published event-log table: it would outlive a destroyed pipeline.
+    assert "event_log" not in pipe
 
 
-def test_dq_evidence_job_runs_the_pipeline_then_reads_its_event_log():
-    res = _bundle()["targets"]["dev_pipeline"]["resources"]
-    # No published event-log table: it would outlive a destroyed pipeline and
-    # block the next deploy (TABLE_OR_VIEW_ALREADY_EXISTS).
-    assert "event_log" not in res["pipelines"]["lakehouse_dq_expectations"]
-    tasks = {t["task_key"]: t for t in res["jobs"]["lakehouse_dq_evidence"]["tasks"]}
-    pipeline_id = tasks["run_pipeline"]["pipeline_task"]["pipeline_id"]
-    assert pipeline_id == "${resources.pipelines.lakehouse_dq_expectations.id}"
-    assert tasks["pipeline_evidence"]["depends_on"] == [{"task_key": "run_pipeline"}]
-    assert os.path.isfile(os.path.join(ROOT, tasks["pipeline_evidence"]["spark_python_task"]["python_file"]))
+def test_dq_evidence_job_reads_the_log_once_without_running_the_pipeline():
+    (task,) = _bundle()["targets"]["dev_pipeline"]["resources"]["jobs"]["lakehouse_dq_evidence"]["tasks"]
+    assert task["task_key"] == "pipeline_evidence" and "pipeline_task" not in task
+    assert task["max_retries"] == 0 and task["disable_auto_optimization"] is True
+    assert os.path.isfile(os.path.join(ROOT, task["spark_python_task"]["python_file"]))
+
+
+def test_pipeline_datasets_use_names_the_deleted_pipeline_never_owned():
+    with open(os.path.join(ROOT, "pipelines", "dq_expectations.py"), encoding="utf-8") as fh:
+        text = fh.read()
+    from lakehouse.tasks import PIPELINE_ANCHOR_VIEW
+
+    assert f'"{PIPELINE_ANCHOR_VIEW}"' in text
+    assert "_prices_checked" not in text.replace("dq_<source>_prices_checked", "")
 
 
 def test_pipeline_source_uses_the_shared_rules():

@@ -36,16 +36,18 @@ def _expect(fn, rules):
     return fn
 
 
-def _checked(source: str):
+def _checked(source: str, name: str):
+    # Names are new on purpose: the first pipeline's dq_<source>_prices_checked
+    # views outlived it and stay owned by the deleted pipeline.
     def build():
         return type_prices(spark.read.table(f"{CATALOG}.{PREFIX}bronze.{source}"))
 
-    build.__name__ = f"dq_{source}_checked"
+    build.__name__ = name
     return _view(
-        name=f"dq_{source}_checked",
+        name=name,
         comment=f"{source} bronze after the job path's quality rules, applied as expectations",
     )(_expect(build, PRICE_RULES))
 
 
-dq_yfinance_prices_checked = _checked("yfinance_prices")
-dq_tiingo_prices_checked = _checked("tiingo_prices")
+dq_yfinance_expectations = _checked("yfinance_prices", "dq_yfinance_expectations")
+dq_tiingo_expectations = _checked("tiingo_prices", "dq_tiingo_expectations")
