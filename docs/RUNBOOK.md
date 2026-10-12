@@ -165,6 +165,8 @@ python scripts\render_results.py .\outputs\reports | Out-File -Encoding utf8 .\o
 
 `outputs/reports` is gitignored (raw CLI output can carry account details). Paste `results.md`
 into the README's Results section and the probe table into Platform.
+`outputs/databricks/` holds the reports behind the README, with the account e-mail replaced by
+`workspace-owner`, plus `run_attempts.json` (attempts per run, from `databricks jobs list-runs --expand-tasks`).
 
 ## Teardown
 

@@ -1,0 +1,156 @@
+{
+  "run_id": "503362447812204",
+  "run_date": null,
+  "tasks": [
+    {
+      "task": "bronze",
+      "table_name": "lakehouse_lab.lakehouse_bronze.yfinance_prices",
+      "rows_in": 0,
+      "inserted": 0,
+      "updated": 0,
+      "version": null,
+      "note": "autoloader"
+    },
+    {
+      "task": "bronze",
+      "table_name": "lakehouse_lab.lakehouse_bronze.tiingo_prices",
+      "rows_in": 0,
+      "inserted": 0,
+      "updated": 0,
+      "version": null,
+      "note": "autoloader"
+    },
+    {
+      "task": "bronze",
+      "table_name": "lakehouse_lab.lakehouse_bronze.constituents",
+      "rows_in": 0,
+      "inserted": 0,
+      "updated": 0,
+      "version": null,
+      "note": "autoloader"
+    },
+    {
+      "task": "bronze",
+      "table_name": "lakehouse_lab.lakehouse_bronze.openfigi_mapping",
+      "rows_in": 0,
+      "inserted": 0,
+      "updated": 0,
+      "version": null,
+      "note": "autoloader"
+    },
+    {
+      "task": "bronze",
+      "table_name": "lakehouse_lab.lakehouse_bronze.fred_series",
+      "rows_in": 0,
+      "inserted": 0,
+      "updated": 0,
+      "version": null,
+      "note": "autoloader"
+    },
+    {
+      "task": "silver",
+      "table_name": "lakehouse_lab.lakehouse_silver.prices_yfinance",
+      "rows_in": 699775,
+      "inserted": 0,
+      "updated": 0,
+      "version": 9,
+      "note": "duplicates=370"
+    },
+    {
+      "task": "silver",
+      "table_name": "lakehouse_lab.lakehouse_silver.prices_tiingo",
+      "rows_in": 78978,
+      "inserted": 0,
+      "updated": 0,
+      "version": 9,
+      "note": "duplicates=42"
+    },
+    {
+      "task": "silver",
+      "table_name": "lakehouse_lab.lakehouse_silver.constituents",
+      "rows_in": 1006,
+      "inserted": 0,
+      "updated": 0,
+      "version": 9,
+      "note": null
+    },
+    {
+      "task": "silver",
+      "table_name": "lakehouse_lab.lakehouse_silver.figi_map",
+      "rows_in": 3,
+      "inserted": 0,
+      "updated": 0,
+      "version": 9,
+      "note": null
+    },
+    {
+      "task": "silver",
+      "table_name": "lakehouse_lab.lakehouse_silver.macro_rate",
+      "rows_in": 4028,
+      "inserted": 0,
+      "updated": 0,
+      "version": 9,
+      "note": null
+    },
+    {
+      "task": "gold",
+      "table_name": "lakehouse_lab.lakehouse_gold.dim_date",
+      "rows_in": null,
+      "inserted": 0,
+      "updated": 0,
+      "version": 21,
+      "note": "2019-01-01..2026-09-09"
+    },
+    {
+      "task": "gold",
+      "table_name": "lakehouse_lab.lakehouse_gold.fact_price_daily",
+      "rows_in": null,
+      "inserted": 0,
+      "updated": 0,
+      "version": 9,
+      "note": "{\"yfinance\": {\"rows\": 699405, \"skipped_no_security_key\": 0, \"skipped_no_date_key\": 0}, \"tiingo\": {\"rows\": 78936, \"skipped_no_security_key\": 0, \"skipped_no_date_key\": 0}}"
+    },
+    {
+      "task": "gold",
+      "table_name": "lakehouse_lab.lakehouse_gold.fact_price_daily_consensus",
+      "rows_in": null,
+      "inserted": 0,
+      "updated": 0,
+      "version": 25,
+      "note": "{\"compared\": 63575, \"flagged\": 1262, \"yfinance_only\": 635830, \"tiingo_only\": 15361}"
+    },
+    {
+      "task": "gold",
+      "table_name": "lakehouse_lab.lakehouse_gold.fact_macro_rate",
+      "rows_in": null,
+      "inserted": 0,
+      "updated": 0,
+      "version": 9,
+      "note": null
+    }
+  ],
+  "gates_checked": 37,
+  "gates_failed": [],
+  "quarantine": {
+    "prices_yfinance/warn": 1
+  },
+  "reconciliation": {
+    "compared": 63575,
+    "flagged": 1262,
+    "yfinance_only": 635830,
+    "tiingo_only": 15361
+  },
+  "parity": {
+    "status": "match",
+    "reference": {
+      "source_ingest_date": "2026-09-08",
+      "compared": 63575,
+      "flagged": 1262,
+      "yfinance_only": 635830,
+      "tiingo_only": 15361,
+      "tolerance": 0.005,
+      "complete_at_drop": "2026-09-09"
+    },
+    "problems": []
+  }
+}

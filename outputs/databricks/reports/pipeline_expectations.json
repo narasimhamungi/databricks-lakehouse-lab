@@ -1,0 +1,119 @@
+{
+  "update_id": "a5d4f525-ba04-488b-b8d9-1142f888717a",
+  "flows": {
+    "lakehouse_lab.lakehouse_ops.dq_yfinance_expectations": {
+      "dropped_records": 0,
+      "expectations": {
+        "ticker_not_null": {
+          "passed": 699775,
+          "failed": 0
+        },
+        "high_ge_low": {
+          "passed": 699775,
+          "failed": 0
+        },
+        "close_positive": {
+          "passed": 699775,
+          "failed": 0
+        },
+        "low_le_open": {
+          "passed": 699774,
+          "failed": 1
+        },
+        "date_not_null": {
+          "passed": 699775,
+          "failed": 0
+        },
+        "high_ge_close": {
+          "passed": 699775,
+          "failed": 0
+        },
+        "high_ge_open": {
+          "passed": 699775,
+          "failed": 0
+        },
+        "close_not_null": {
+          "passed": 699775,
+          "failed": 0
+        },
+        "adj_close_not_null": {
+          "passed": 699775,
+          "failed": 0
+        },
+        "adj_close_positive": {
+          "passed": 699775,
+          "failed": 0
+        },
+        "open_positive": {
+          "passed": 699775,
+          "failed": 0
+        },
+        "volume_non_negative": {
+          "passed": 699775,
+          "failed": 0
+        },
+        "low_le_close": {
+          "passed": 699775,
+          "failed": 0
+        }
+      }
+    },
+    "lakehouse_lab.lakehouse_ops.dq_tiingo_expectations": {
+      "dropped_records": 0,
+      "expectations": {
+        "ticker_not_null": {
+          "passed": 78978,
+          "failed": 0
+        },
+        "high_ge_low": {
+          "passed": 78978,
+          "failed": 0
+        },
+        "close_positive": {
+          "passed": 78978,
+          "failed": 0
+        },
+        "low_le_open": {
+          "passed": 78978,
+          "failed": 0
+        },
+        "date_not_null": {
+          "passed": 78978,
+          "failed": 0
+        },
+        "high_ge_close": {
+          "passed": 78978,
+          "failed": 0
+        },
+        "high_ge_open": {
+          "passed": 78978,
+          "failed": 0
+        },
+        "close_not_null": {
+          "passed": 78978,
+          "failed": 0
+        },
+        "adj_close_not_null": {
+          "passed": 78978,
+          "failed": 0
+        },
+        "adj_close_positive": {
+          "passed": 78978,
+          "failed": 0
+        },
+        "open_positive": {
+          "passed": 78978,
+          "failed": 0
+        },
+        "volume_non_negative": {
+          "passed": 78978,
+          "failed": 0
+        },
+        "low_le_close": {
+          "passed": 78978,
+          "failed": 0
+        }
+      }
+    }
+  }
+}

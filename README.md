@@ -1,190 +1,262 @@
 # databricks-lakehouse-lab
 
 The bronze/silver/gold equities pipeline from
-[marketdata-lakehouse](https://github.com/narasimhamungi/marketdata-lakehouse), ported from
-pandas and Postgres to PySpark, Delta Lake and Databricks Workflows. It loads a verified snapshot
-in daily drops, keeps every load idempotent with Delta `MERGE`, builds an SCD-2 security dimension,
-and checks its reconciliation counts against the original pipeline's report.
+[marketdata-lakehouse](https://github.com/narasimhamungi/marketdata-lakehouse), rebuilt on
+PySpark, Delta Lake, Databricks Workflows and Unity Catalog. It loads a verified market-data
+snapshot in daily drops with Auto Loader, keeps every load idempotent with Delta `MERGE`, builds an
+SCD-2 security dimension, applies one set of quality rules in both a job and a declarative
+pipeline, and checks its reconciliation against the original pipeline's report.
 
-**On 778,341 real price rows, the Spark port reproduces the original pipeline's cross-vendor
-reconciliation exactly: 63,575 compared, 1,262 flagged, 635,830 yfinance-only, 15,361 Tiingo-only.**
-
-## Status
+**On Databricks serverless, over 778,341 real price rows, the port reproduces the original
+pipeline's cross-vendor reconciliation exactly (63,575 compared, 1,262 flagged, 635,830
+yfinance-only, 15,361 Tiingo-only), and every table-level count matches a local Spark run of the
+same code.**
 
 | | |
 |---|---|
-| Code, tests, bundle, Day 0 probe | Built |
-| Tests | 88 (77 on plain Spark, 11 on Delta Lake) |
-| Local run on real data | Done, drop by drop: parity with the original pipeline matches; 11 Delta tests pass |
-| Databricks run | **Not yet run.** The Platform section and the Databricks results are filled from that run, not estimated |
+| Databricks run | Done 2026-10-10/12 on Databricks Free Edition (serverless, Databricks Runtime 19.9, catalog `lakehouse_lab`) |
+| Local run | Done 2026-10-09 (Spark 4.0.1, Delta Lake 4.0.0, Docker): identical numbers |
+| Tests | 102 (91 on plain Spark, 11 on Delta Lake); CI green on every push |
+| Evidence | [`outputs/databricks/`](outputs/databricks/) (run reports, Delta and pipeline evidence, retry record) and [`docs/screenshots/`](docs/screenshots/) |
 
-## Results
+## Problem
 
-### Local run on real data
+marketdata-lakehouse proved a data design locally: five sources, a quality suite, cross-vendor
+price reconciliation and a star schema in Postgres, rebuilt from scratch on every run. On a
+lakehouse platform the same design has to survive three things the local version never faced:
+data that arrives incrementally, loads that must be safe to re-run, and governance that lives in the
+catalog rather than in a README.
 
-Local Spark 4.0.1 with Delta Lake 4.0.0 in Docker, 2026-10-09. The four drops were loaded one at a time, then the workflow ran once more with nothing new (`scripts/run_local.py`). The tables below are `scripts/render_results.py` output.
+## What was built
 
-| Drop | Bronze rows added (yfinance) | Silver yfinance inserted / updated | Silver Tiingo inserted / updated | dim_security new / changed / closed | Quarantined rows | Gates failed | Parity |
-|---|---|---|---|---|---|---|---|
-| 2026-09-04 | 698,665 | 698,665 / 0 | 78,852 / 0 | 503 / 0 / 0 | 1 | 0 | pending |
-| 2026-09-08 | 370 | 370 / 0 | 42 / 0 | - | 0 | 0 | pending |
-| 2026-09-09 | 740 | 370 / 0 | 42 / 0 | - | 0 | 0 | match |
-| 2026-10-07 | 0 | 0 / 0 | 0 / 0 | 6 / 0 / 6 | 0 | 0 | match |
+```mermaid
+flowchart LR
+    subgraph local["Local machine"]
+        MDL["marketdata-lakehouse<br/>bronze parquet"] --> EXP["export_snapshot.py<br/>landing contract, 3 price drops,<br/>later constituents drop,<br/>manifest (rows, sha256)"]
+    end
+    EXP -->|"upload one drop at a time"| VOL["UC volume<br/>landing/&lt;source&gt;/drop_date=…"]
+    subgraph job["Workflow: lakehouse-daily (Asset Bundle, serverless)"]
+        V["verify_manifest"] --> B["bronze<br/>Auto Loader, available-now"] --> S["silver<br/>type, dedupe, quality, MERGE"] --> G["gold<br/>dim_date, dim_security SCD-2,<br/>facts, consensus, MERGE"] --> D["docs_and_tags"] --> R["dq_report<br/>gates + parity"]
+    end
+    VOL --> V
+    S -.->|"failing rows"| Q[("ops.dq_quarantine")]
+    R -.->|"failure"| E["e-mail"]
+    B -.-> P["Lakeflow declarative pipeline<br/>same rules as expectations"]
+```
 
-Run `rerun` with no new drop: 0 rows inserted and 0 updated across 14 table writes; 0 gates failed; parity match.
+| Layer | Tables | What happens |
+|---|---|---|
+| Bronze | `yfinance_prices`, `tiingo_prices`, `constituents`, `openfigi_mapping`, `fred_series` | Append-only via Auto Loader. Every row carries `_source_file`, `_file_modified_at`, `_drop_date`, `_ingested_at`; the checkpoint reads each file once. |
+| Silver | `prices_yfinance`, `prices_tiingo`, `constituents`, `figi_map`, `macro_rate` | Typed, deduplicated (latest drop wins), quality-checked. `MERGE` updates a row only when a value changed and never lets an older drop overwrite a newer one. |
+| Gold | `dim_date`, `dim_security`, `fact_price_daily`, `fact_price_daily_consensus`, `fact_macro_rate` | The Postgres star schema on Delta. `dim_security` is SCD-2 via a staged-updates `MERGE`; facts key to the dimension version in effect on their date. |
+| Ops | `dq_quarantine`, `dq_results`, `task_metrics`, `reconciliation_runs` | What each run read, wrote, rejected and decided. |
 
-| Reconciliation | Spark port | Original pipeline (pandas, 2026-09-08 report) |
+**Data and tools.** S&P 500 daily prices to 2026-09-09 from yfinance (370 tickers) and Tiingo (42-ticker
+sample), constituents, OpenFIGI mapping and four FRED series, exported from marketdata-lakehouse.
+PySpark 4, Delta Lake, Databricks Workflows, Auto Loader, Unity Catalog, Lakeflow Declarative
+Pipelines, Databricks Asset Bundles and CLI, pytest and GitHub Actions.
+
+## Results on Databricks
+
+The four drops were uploaded and run one at a time (`lakehouse_daily --params run_date=<drop>`),
+then the job ran again with nothing new. Output of `scripts/render_results.py` over the run reports:
+
+| Drop | Bronze rows added (yfinance) | Silver yfinance inserted / updated | Silver Tiingo inserted / updated | dim_security new / changed / closed | Parity | Job time |
+|---|---|---|---|---|---|---|
+| 2026-09-04 | 698,665 | 698,665 / 0 | 78,852 / 0 | 503 / 0 / 0 | pending | 7m 15s |
+| 2026-09-08 | 370 | 370 / 0 | 42 / 0 | – | pending | 4m 45s |
+| 2026-09-09 (re-sends 09-08) | 740 | 370 / 0 | 42 / 0 | – | **match** | 4m 44s |
+| 2026-10-07 (constituents only) | 0 | 0 / 0 | 0 / 0 | 6 / 0 / 6 | match | 6m 28s |
+| Re-run, no new drop (twice) | 0 | 0 / 0 | 0 / 0 | – | match | 4m 54s, 6m 45s |
+
+| Reconciliation | Spark port on Databricks | Original pipeline (pandas, 2026-09-08 report) |
 |---|---|---|
 | (ticker, date) pairs compared | 63,575 | 63,575 |
 | Flagged above 0.5% | 1,262 | 1,262 |
 | yfinance only | 635,830 | 635,830 |
 | Tiingo only | 15,361 | 15,361 |
 
-Parity is `pending` until the 2026-09-09 drop because the reference report covers the whole snapshot.
+- **Identical to the local run.** For all five runs, rows inserted and updated in every table, gate
+  results, quarantine and parity match the local Docker run exactly.
+- **Incremental and idempotent.** The 09-09 drop re-sent 09-08: 740 rows reached bronze and silver
+  inserted only the 370 new ones. Both re-runs changed no rows in any of the 14 bronze, silver and
+  gold writes.
+- **SCD-2 on a real index change.** The 10-07 snapshot opened 6 securities (BE, ILMN, P, SKYD, TWLO,
+  VYLR), closed 6 (BLDR, CTVA, PSKY, TAP, TTD, WBD) and left 497 unchanged. The fact reload after it
+  inserted 0 rows and left 0 without a security key, so the removed tickers' history kept its keys.
+- **Gold:** 778,341 rows in `fact_price_daily`, 714,766 in `fact_price_daily_consensus`.
+- **Quality:** 0 gates failed in any run. One row was quarantined as a warning and kept: HUBB on
+  2021-05-05, where the low (196.21) is above the open (195.98), the vendor bad print the original
+  pipeline documented.
+- Job times are mostly serverless start-up across six tasks, not processing; they are not a
+  performance claim.
 
-- **Incremental and idempotent.** The 2026-09-09 drop re-sent 2026-09-08: 740 rows reached bronze, silver inserted only the 370 new ones and updated none. The final re-run wrote nothing.
-- **SCD-2 on a real index change.** The 2026-10-07 snapshot closed 6 securities, opened 6 and left 497 unchanged. The fact reload after it inserted 0 rows and left 0 rows without a security key, so the removed tickers' history kept its keys. The calendar stayed at 2026-09-09.
-- **Gold:** 778,341 rows in `fact_price_daily` and 714,766 in `fact_price_daily_consensus`, every one with a security and a date key.
-- **Silver:** 699,405 yfinance rows (370 tickers) and 78,936 Tiingo rows (42 tickers).
-- **Quality:** 36 gates on the first drop, 0 failed in any run. One row was quarantined as a warning and kept in silver: HUBB on 2021-05-05, where the low (196.21) is above the open (195.98). This is the vendor bad print the original pipeline documented.
+![Run graph](docs/screenshots/run_graph.png)
 
-## Why this exists
+## Platform evidence
 
-marketdata-lakehouse proved the data design locally: five sources, a quality suite, cross-vendor
-reconciliation, and a star schema in Postgres. This repo asks whether the same design holds on a
-lakehouse platform, where loads are incremental and must be safe to re-run, and where governance
-lives in the catalog rather than in a README.
+**Day 0 probe** (`notebooks/00_capability_probe.py`, 2026-10-10, serverless). Every automated check passed:
 
-## Architecture
+| Check | Result |
+|---|---|
+| Create catalog, schema, volume; file I/O on the volume | PASS |
+| Delta write, `MERGE`, `DESCRIBE HISTORY`, `VERSION AS OF` | PASS |
+| Auto Loader available-now with checkpoint (re-run adds 0 rows); file-stream fallback | PASS |
+| `OPTIMIZE`, `VACUUM` | PASS |
+| Table and column comments, table tags | PASS |
+| `GRANT` / `SHOW GRANTS`; row filter (3 rows, 2 visible) | PASS, probe only, not used by the pipeline |
 
-```mermaid
-flowchart LR
-    subgraph local["Your machine"]
-        MDL["marketdata-lakehouse<br/>bronze parquet"] --> EXP["export_snapshot.py<br/>contract + 3 price drops<br/>+ later constituents drop<br/>+ manifest (rows, sha256)"]
-    end
-    EXP -->|"upload one drop at a time"| VOL["UC volume<br/>landing/&lt;source&gt;/drop_date=…"]
-    subgraph job["Workflow: lakehouse-daily"]
-        V["verify_manifest"] --> B["bronze<br/>Auto Loader, available-now"] --> S["silver<br/>type, dedupe, quality, adjust<br/>MERGE"] --> G["gold<br/>dim_date, dim_security SCD-2,<br/>facts, consensus — MERGE"] --> D["docs_and_tags"] --> R["dq_report<br/>gates + parity"]
-    end
-    VOL --> V
-    S -.->|"failing rows"| Q[("ops.dq_quarantine")]
-    R -.->|"fail → email"| E["on-failure email"]
-```
+**Operational checks on the real workflow:**
 
-| Layer | Tables | What happens |
-|---|---|---|
-| Bronze | `yfinance_prices`, `tiingo_prices`, `constituents`, `openfigi_mapping`, `fred_series` | Append-only. Every row carries `_source_file`, `_file_modified_at`, `_drop_date` and `_ingested_at`. A checkpoint means a file is read once. |
-| Silver | `prices_yfinance`, `prices_tiingo`, `constituents`, `figi_map`, `macro_rate` | Typed, deduplicated (the latest drop wins), and quality-checked. Adjusted O/H/L are derived for yfinance and native for Tiingo. `MERGE` only lets a newer drop overwrite an older one. |
-| Gold | `dim_date`, `dim_security`, `fact_price_daily`, `fact_price_daily_consensus`, `fact_macro_rate` | The Postgres star schema on Delta. `dim_security` is SCD-2 via the staged-updates `MERGE`. The consensus fact carries the reconciliation flag. |
-| Ops | `dq_quarantine`, `dq_results`, `task_metrics`, `reconciliation_runs` | What each run read, wrote, rejected and decided. |
+- **Asset Bundle deploy from the CLI** (OAuth login) of three jobs, plus a separate target for the pipeline.
+- **Unity Catalog governance.** `docs_and_tags` applies 49 table/column comments and tags
+  (`layer`, `domain`, `contains_pii`) with 0 failures on every run
+  ([screenshot](docs/screenshots/catalog_docs_tags.png)). Unity Catalog records lineage for the
+  job run: 16 upstream and 19 downstream tables.
+- **Manifest gate.** A deliberately broken manifest row count fails the run at `verify_manifest`, skips
+  every later task and sends the failure e-mail ([run](docs/screenshots/failed_run.png),
+  [e-mail](docs/screenshots/failure_email.png)). Since finding 1 below, it fails in one attempt.
 
-## What carries over from the original, and what changed
+## Delta Lake evidence
 
-**Ported as-is.**
+From `lakehouse_delta_evidence` on the real tables ([`delta_evidence.json`](outputs/databricks/reports/delta_evidence.json)):
 
-- 0.5% symmetric `adj_close` tolerance, measured against the mean of the two vendors.
-- yfinance as the primary source, because it has the wider coverage (370 tickers against Tiingo's 42-ticker sample).
-- `is_trading_day` derived from the data rather than a holiday calendar.
-- SCD-2 on company name, GICS sector and sub-industry, and FIGI.
-- 99.99% tolerance on OHLC ordering, since one vendor bad print in ~950K rows is noise.
-- Zero tolerance on nulls and non-positive prices.
+- **Time travel.** Silver yfinance row count by version: 0 → 698,665 → 699,035 → 699,405, flat after.
+- **Schema enforcement.** An append with an extra column and no `mergeSchema` is rejected
+  (`DELTA_METADATA_MISMATCH`). Writing strings to a `DOUBLE` column behaves differently: `'not a number'`
+  fails as a cast error, but `'3.25'` is accepted and stored as 3.25 (Databricks casts on append).
+- **Schema evolution.** The same append with `mergeSchema` adds the column; earlier rows read NULL.
+- **OPTIMIZE.** Bronze yfinance went from 3 streaming files to 1 (commit 9, written by the evidence
+  job). On a scratch table with auto-compaction off, 8 single-row appends compact to 1 file.
+- **Predictive optimization.** Enabled on the schema. Silver yfinance commit 13 is an `OPTIMIZE` that no
+  task here runs: it was written by Databricks' "Predictive Optimization Job" and merged 12 files into 1.
+- **VACUUM** with the default 7-day retention: 0 files eligible yet.
 
-**Changed, and why.**
+## One rule set, two engines
 
-- **Point-in-time fact keys.** Each price keys to the `dim_security` version in effect on its date. The first version also covers dates before the first snapshot, and the latest version stays open after a removal. The original keys every fact to the current row, which means an attribute change re-keys history on the next reload (duplicate facts under the old and new key) and a removal orphans the ticker's history.
-- **Incremental loads.** The original re-pulls full history every run. Here, data arrives in dated drops, so dedupe keeps the latest drop, and the silver `MERGE` refuses to let an older drop overwrite a newer one.
-- **Deterministic surrogate keys.** `security_key = xxhash64(ticker, effective_from)` replaces a `SERIAL`, so rebuilding the dimension gives the same keys.
-- **One extra rule.** `adj_close_not_null` is added, because the consensus fact declares `adj_close NOT NULL`.
+The quality rules are null-safe SQL strings in `lakehouse/quality.py`. The job path uses them to split
+rows into clean and quarantine; the Lakeflow declarative pipeline (`pipelines/dq_expectations.py`)
+turns the same strings into `expect_or_drop` and `expect`. Run over the same bronze tables, the pipeline
+finds exactly one violation, on the rule and count the job path quarantined
+([`pipeline_expectations.json`](outputs/databricks/reports/pipeline_expectations.json)):
 
-**Not ported.** `fact_corporate_action`, the Airflow DAG (replaced by the Workflow) and live API ingestion. Free Edition restricts outbound traffic, so the data arrives as an exported snapshot.
+| Dataset | Rows | Expectations | Failed | Dropped |
+|---|---|---|---|---|
+| yfinance | 699,775 | 13 | 1 (`low_le_open`; the job path's one warning is HUBB 2021-05-05) | 0 |
+| Tiingo | 78,978 | 13 | 0 | 0 |
 
-## Methods worth a look
+## Findings from running it
 
-- **Manifest before anything else.** The export records row count and sha256 per file. The first task fails the run on any mismatch, missing file or unexpected file, and it has no retries, because re-running a hash mismatch only delays the alert.
-- **Idempotent at every layer.**
-  - Bronze relies on the stream checkpoint, or in batch mode on an anti-join over `_source_file`.
-  - Silver and gold `MERGE` statements update a row only when a compared column actually changed, using NULL-safe `<=>`.
-  - A re-run with nothing new should therefore write 0 rows everywhere. `test_rerunning_everything_changes_nothing` asserts it, and step 4 of the runbook records it on Databricks.
-- **One set of quality rules, two engines.** Rules are null-safe SQL strings in `lakehouse/quality.py`. The job path splits rows into clean and quarantine with them. The optional declarative pipeline turns the same strings into `expect_or_drop` and `expect`.
-- **Parity with the original.**
-  - The export parses marketdata-lakehouse's reconciliation report for the same snapshot.
-  - After the last drop, `dq_report` compares the Spark port's compared, flagged, yfinance-only and Tiingo-only counts with it, and fails the run on a mismatch.
-  - Earlier drops report `pending`, because the reference covers the whole snapshot.
-- **SCD-2 on a real index change.** A later constituents snapshot (2026-10-07) is landed as a fourth drop. Between the two snapshots, 6 tickers were added (BE, ILMN, P, SKYD, TWLO, VYLR) and 6 removed (BLDR, CTVA, PSKY, TAP, TTD, WBD), with no attribute changes. The removed tickers' rows are closed and their price history keeps its keys.
-- **Spark Connect-safe.** Serverless jobs run on Spark Connect, so writes go through SQL `MERGE` on temp views rather than the `DeltaTable` Python API. Nothing touches `sparkContext`.
+1. **`max_retries: 0` is not at-most-once on serverless.** Serverless auto-optimization retried the
+   failed manifest check anyway: every failed run made 2 attempts. Setting
+   `disable_auto_optimization: true` on the gate tasks made it 1
+   ([`run_attempts.json`](outputs/databricks/run_attempts.json)). A pipeline task showed the same
+   pattern: six pipeline updates inside one 12-minute job run with no retries configured.
+2. **Destroying a declarative pipeline does not free its tables.** After `bundle destroy`, the
+   pipeline's materialized views stayed, still "managed by" the deleted pipeline, and every new
+   pipeline failed on them. A published event-log table outlived it the same way. The fix: new view
+   names, the pipeline kept deployed, and expectation counts read with `event_log(TABLE(<view>))`.
+3. **Databricks casts on append.** Schema enforcement rejects structural mismatches, not every type
+   mismatch: a numeric string goes into a `DOUBLE` column.
+4. **Some maintenance is not yours.** Predictive optimization compacted silver on its own; the commit
+   history (job name per commit) is the way to tell which compactions a pipeline caused.
+5. **"Changed no rows" is not "wrote nothing".** A re-run commits Delta versions (a no-op `MERGE`,
+   re-applied comments) and logs itself in the ops tables, including the HUBB warning again, because a
+   re-run without a drop date re-checks all of bronze.
 
-## Platform
+## Methodology
 
-_Day 0 probe results go here (`notebooks/00_capability_probe.py`). Only checks that pass are claimed._
+**Ported as-is from the original:** 0.5% symmetric `adj_close` tolerance against the mean of the two
+vendors; yfinance as primary source (wider coverage); `is_trading_day` derived from the data; SCD-2 on
+company name, GICS sector and sub-industry, and FIGI; 99.99% tolerance on OHLC ordering; zero tolerance
+on nulls and non-positive prices.
+
+**Changed, and why:**
+
+- **Point-in-time fact keys.** Each price keys to the `dim_security` version in effect on its date (the
+  first version also covers earlier dates; the latest stays open after a removal). The original keys
+  facts to the current row, which re-keys history after an attribute change and orphans a removed
+  ticker's history.
+- **Incremental loads.** Data arrives in dated drops; dedupe keeps the latest drop, and the silver
+  `MERGE` refuses to let an older drop overwrite a newer one.
+- **Deterministic surrogate keys.** `security_key = xxhash64(ticker, effective_from)`, so a rebuild
+  gives the same keys.
+- **One extra rule.** `adj_close_not_null`, because the consensus fact declares `adj_close NOT NULL`.
+
+**Other design points:**
+
+- **Manifest before anything else.** The export records row count and sha256 per file; the first task
+  fails on any mismatch, missing or unexpected file, with no retries.
+- **Parity with the original.** The export parses marketdata-lakehouse's reconciliation report;
+  `dq_report` compares counts after the last drop and fails the run on a mismatch (earlier drops report
+  `pending`).
+- **Spark Connect-safe.** Serverless runs on Spark Connect, so writes are SQL `MERGE` on temp views, not
+  the `DeltaTable` Python API, and nothing touches `sparkContext`.
+
+**Not ported:** `fact_corporate_action`, the Airflow DAG (replaced by the Workflow) and live API
+ingestion (Free Edition restricts outbound traffic, so data arrives as an exported snapshot).
+
+## What this demonstrates
+
+A pandas/Postgres batch design carried onto a lakehouse without losing correctness: incremental
+Auto Loader ingestion, idempotent Delta `MERGE` at every layer, SCD-2 with point-in-time keys,
+Unity Catalog governance, a Workflow deployed as code, and data quality enforced the same way in two
+engines, all proven against an independent reference and a local run rather than asserted. The
+findings section is the operational part: each one came from a run that did not behave as configured,
+was traced to its cause and fixed.
 
 ## Tests and CI
 
-88 tests:
+102 tests. 91 run on plain Spark: export and landing contract, manifests, the file stream reading each
+file once, typing, dedupe, adjustment, every quality rule and gate, `dim_date`, SCD-2, reconciliation,
+point-in-time keys, the `MERGE` SQL builders, the bundle's structure (including that every referenced
+job parameter is declared and that no-retry tasks disable auto-optimization), event-log parsing and the
+scripts. 11 need Delta Lake and build the whole pipeline over three drops (row counts, overlap day not
+rewritten, quarantine, parity, full re-run changing nothing, failing gates, batch-mode idempotency,
+Delta evidence, SCD-2 on a new snapshot).
 
-- **77 run on plain Spark.** They cover the export and its landing contract (including extra constituents snapshots), manifests, the streaming file source reading each file exactly once, typing, dedupe, adjustment, every quality rule and the gate, `dim_date`, SCD-2 classification and staging, reconciliation, point-in-time key matching, the `MERGE` SQL builders, the bundle's structure, the local runner and the helper scripts.
-- **11 need Delta Lake** (marked `delta`). They build the whole pipeline over three drops and check:
-  - bronze, silver and gold row counts;
-  - that the overlap day is not rewritten;
-  - quarantine contents;
-  - reconciliation parity;
-  - a full re-run changing nothing;
-  - the strict gate failing;
-  - a parity mismatch failing;
-  - batch-mode idempotency;
-  - Delta evidence;
-  - an SCD-2 `MERGE` on a new snapshot that leaves existing facts and the calendar untouched.
-
-CI (GitHub Actions: Java 17, Python 3.12, PySpark 4.0.1, delta-spark 4.0.0) sets `REQUIRE_DELTA=1`, so the Delta tests fail rather than skip if the jars don't load.
+CI (GitHub Actions: Java 17, Python 3.12, PySpark 4.0.1, delta-spark 4.0.0) sets `REQUIRE_DELTA=1`, so
+the Delta tests fail rather than skip if the jars don't load.
 
 ```bash
 pip install -e ".[dev]"
-pytest            # Delta tests are skipped when the Delta jars can't be fetched
+pytest
 ruff check . && ruff format --check .
 ```
 
 ## Reproduce
 
-See [docs/RUNBOOK.md](docs/RUNBOOK.md).
-
-**Locally**, with Docker only: export the snapshot, then `scripts/run_local.py` loads the drops one at a time in a single Spark session, re-runs with nothing new, and writes the reports `scripts/render_results.py` turns into the tables above.
-
-**On Databricks**, in outline:
-
-1. Run the Day 0 probe.
-2. Export the snapshot.
-3. `databricks bundle deploy`, then run `lakehouse_setup`.
-4. Upload and run each drop.
-5. Re-run with nothing new.
-6. Run one deliberate failure.
-7. Run `lakehouse_delta_evidence`.
-8. Render the results.
+[docs/RUNBOOK.md](docs/RUNBOOK.md) goes from a fresh Free Edition workspace to every number above:
+probe, export, local reproduction (Docker only), `databricks bundle deploy`, setup, drop-by-drop loads,
+the deliberate failure, Delta evidence, the declarative pipeline, and rendering the results.
 
 ## Limitations
 
-- **Databricks Free Edition.** Serverless only, non-commercial use, restricted outbound internet, one active pipeline per type, and five concurrent job tasks.
-- **Snapshot data, not live feeds.** Drops simulate daily arrival from one verified export. There is no real-time or streaming claim beyond Auto Loader's available-now trigger over files.
-- **Single user.** GRANT, row filters and column masks are probed but not part of the design.
-- **Small data.** Under a million price rows, so OPTIMIZE timings are reported as measured, not presented as a speed-up.
-- **Coverage of the source snapshot.** yfinance has prices for 370 of the 503 constituents. Tiingo is a 42-ticker sector-stratified sample; 34 overlap yfinance and 8 do not. These gaps are in marketdata-lakehouse's ingestion, not introduced here.
-- **FIGI.** The source's OpenFIGI mapping covers 3 tickers, so `figi` is NULL for 500 of 503 securities. SCD-2 tracks it; the data barely exercises it.
-- **Snapshot label.** The bronze partition labelled 2026-09-08 holds prices through 2026-09-09; the label is the ingestion run's, not a cut-off.
-- **Inherited from the original.** Volume is not split-adjusted. Constituents come from the original's scraped list, not an index provider.
-- **Not Azure.** The Free Edition docs don't say which cloud hosts it, so nothing here is described as Azure Databricks.
+- **Databricks Free Edition**, serverless only, on AWS (`metastore_aws_us_east_2`). Nothing here is Azure.
+- **Snapshot data, not live feeds.** Drops simulate daily arrival from one verified export; no
+  streaming claim beyond Auto Loader's available-now trigger over files.
+- **Single user.** `GRANT` and row filters are probed, not part of the design.
+- **Small data.** Under a million price rows, so OPTIMIZE timings are not presented as a speed-up.
+- **Source coverage.** yfinance has prices for 370 of 503 constituents; Tiingo is a 42-ticker sample
+  (34 overlap yfinance). OpenFIGI maps 3 tickers, so `figi` is NULL for 500 securities. The bronze
+  partition labelled 2026-09-08 holds prices through 09-09. All inherited from marketdata-lakehouse.
+- **Retries on transient tasks** (bronze, silver, gold, docs) are configured but never fired in these runs.
 
 ## Not claimed
 
 Azure Databricks, Data Factory, ADLS, Event Hubs, Kafka, Purview, Scala, Terraform, Azure DevOps, MLOps.
-Pipeline expectations, Auto Loader and tags are claimed only if the Day 0 probe passes them.
 
 ## Layout
 
 ```
 src/lakehouse/      transforms and tasks (DataFrame in, DataFrame out; delta_io does the writes)
 jobs/               thin entry points, one per workflow task
-pipelines/          optional Lakeflow declarative pipeline (same quality rules)
+pipelines/          Lakeflow declarative pipeline (same quality rules as expectations)
 notebooks/          Day 0 capability probe
 scripts/            export_snapshot, upload_drop, run_local, render_results
-databricks.yml      asset bundle: jobs, optional pipeline target
+databricks.yml      asset bundle: `dev` (workflow jobs), `dev_pipeline` (pipeline + its evidence job)
+outputs/databricks/ run reports and evidence from the Databricks run
+docs/               runbook, screenshots
 tests/              pytest on local Spark; `delta`-marked tests need the Delta jars
 ```
 

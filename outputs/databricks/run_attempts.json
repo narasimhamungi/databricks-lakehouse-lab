@@ -1,0 +1,66 @@
+{
+  "job": "lakehouse-daily",
+  "note": "disable_auto_optimization: true was deployed on verify_manifest between run 982340370714202 and run 581682977722781. Failed runs before it made 2 attempts despite max_retries: 0; the failed run after it made 1.",
+  "runs": [
+    {
+      "run_id": "222090127543644",
+      "started_utc": "2026-10-10 11:17:56",
+      "result": "FAILED",
+      "verify_manifest_attempts": 2
+    },
+    {
+      "run_id": "103072964093766",
+      "started_utc": "2026-10-10 11:43:13",
+      "result": "SUCCESS",
+      "verify_manifest_attempts": 1
+    },
+    {
+      "run_id": "844802108961078",
+      "started_utc": "2026-10-10 11:50:45",
+      "result": "SUCCESS",
+      "verify_manifest_attempts": 1
+    },
+    {
+      "run_id": "638228242738333",
+      "started_utc": "2026-10-10 11:55:44",
+      "result": "SUCCESS",
+      "verify_manifest_attempts": 1
+    },
+    {
+      "run_id": "1034172873050619",
+      "started_utc": "2026-10-10 12:15:55",
+      "result": "SUCCESS",
+      "verify_manifest_attempts": 1
+    },
+    {
+      "run_id": "503362447812204",
+      "started_utc": "2026-10-10 12:22:28",
+      "result": "SUCCESS",
+      "verify_manifest_attempts": 1
+    },
+    {
+      "run_id": "175682067768805",
+      "started_utc": "2026-10-10 13:15:15",
+      "result": "FAILED",
+      "verify_manifest_attempts": 2
+    },
+    {
+      "run_id": "982340370714202",
+      "started_utc": "2026-10-10 13:16:43",
+      "result": "FAILED",
+      "verify_manifest_attempts": 2
+    },
+    {
+      "run_id": "591174523851659",
+      "started_utc": "2026-10-10 14:33:14",
+      "result": "SUCCESS",
+      "verify_manifest_attempts": 1
+    },
+    {
+      "run_id": "581682977722781",
+      "started_utc": "2026-10-10 14:40:13",
+      "result": "FAILED",
+      "verify_manifest_attempts": 1
+    }
+  ]
+}

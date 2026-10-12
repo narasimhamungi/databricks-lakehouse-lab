@@ -1,0 +1,391 @@
+{
+  "history": [
+    {
+      "version": 0,
+      "timestamp": "2026-10-10 11:46:20",
+      "user": "workspace-owner",
+      "job": "[dev narasimhamungi] lakehouse-daily",
+      "operation": "CREATE TABLE AS SELECT",
+      "inserted": null,
+      "updated": null
+    },
+    {
+      "version": 1,
+      "timestamp": "2026-10-10 11:46:33",
+      "user": "workspace-owner",
+      "job": "[dev narasimhamungi] lakehouse-daily",
+      "operation": "MERGE",
+      "inserted": "698665",
+      "updated": "0"
+    },
+    {
+      "version": 2,
+      "timestamp": "2026-10-10 11:49:26",
+      "user": "workspace-owner",
+      "job": "[dev narasimhamungi] lakehouse-daily",
+      "operation": "SET TBLPROPERTIES",
+      "inserted": null,
+      "updated": null
+    },
+    {
+      "version": 3,
+      "timestamp": "2026-10-10 11:52:28",
+      "user": "workspace-owner",
+      "job": "[dev narasimhamungi] lakehouse-daily",
+      "operation": "MERGE",
+      "inserted": "370",
+      "updated": "0"
+    },
+    {
+      "version": 4,
+      "timestamp": "2026-10-10 11:54:37",
+      "user": "workspace-owner",
+      "job": "[dev narasimhamungi] lakehouse-daily",
+      "operation": "SET TBLPROPERTIES",
+      "inserted": null,
+      "updated": null
+    },
+    {
+      "version": 5,
+      "timestamp": "2026-10-10 11:57:24",
+      "user": "workspace-owner",
+      "job": "[dev narasimhamungi] lakehouse-daily",
+      "operation": "MERGE",
+      "inserted": "370",
+      "updated": "0"
+    },
+    {
+      "version": 6,
+      "timestamp": "2026-10-10 11:59:30",
+      "user": "workspace-owner",
+      "job": "[dev narasimhamungi] lakehouse-daily",
+      "operation": "SET TBLPROPERTIES",
+      "inserted": null,
+      "updated": null
+    },
+    {
+      "version": 7,
+      "timestamp": "2026-10-10 12:18:31",
+      "user": "workspace-owner",
+      "job": "[dev narasimhamungi] lakehouse-daily",
+      "operation": "MERGE",
+      "inserted": "0",
+      "updated": "0"
+    },
+    {
+      "version": 8,
+      "timestamp": "2026-10-10 12:21:19",
+      "user": "workspace-owner",
+      "job": "[dev narasimhamungi] lakehouse-daily",
+      "operation": "SET TBLPROPERTIES",
+      "inserted": null,
+      "updated": null
+    },
+    {
+      "version": 9,
+      "timestamp": "2026-10-10 12:24:14",
+      "user": "workspace-owner",
+      "job": "[dev narasimhamungi] lakehouse-daily",
+      "operation": "MERGE",
+      "inserted": "0",
+      "updated": "0"
+    },
+    {
+      "version": 10,
+      "timestamp": "2026-10-10 12:26:33",
+      "user": "workspace-owner",
+      "job": "[dev narasimhamungi] lakehouse-daily",
+      "operation": "SET TBLPROPERTIES",
+      "inserted": null,
+      "updated": null
+    },
+    {
+      "version": 11,
+      "timestamp": "2026-10-10 14:36:09",
+      "user": "workspace-owner",
+      "job": "[dev narasimhamungi] lakehouse-daily",
+      "operation": "MERGE",
+      "inserted": "0",
+      "updated": "0"
+    },
+    {
+      "version": 12,
+      "timestamp": "2026-10-10 14:38:53",
+      "user": "workspace-owner",
+      "job": "[dev narasimhamungi] lakehouse-daily",
+      "operation": "SET TBLPROPERTIES",
+      "inserted": null,
+      "updated": null
+    },
+    {
+      "version": 13,
+      "timestamp": "2026-10-10 15:07:08",
+      "user": "67fe7a69-dfa8-4242-a488-21bfbffa46ae",
+      "job": "Predictive Optimization Job-576b31d6-bf7b-4e2a-bf5d-b2e4484e2c05",
+      "operation": "OPTIMIZE",
+      "inserted": null,
+      "updated": null
+    }
+  ],
+  "time_travel": {
+    "v0": 0,
+    "v1": 698665,
+    "v2": 698665,
+    "v3": 699035,
+    "v4": 699035,
+    "v5": 699405,
+    "v6": 699405,
+    "v7": 699405,
+    "v8": 699405,
+    "v9": 699405,
+    "v10": 699405,
+    "v11": 699405,
+    "v12": 699405,
+    "v13": 699405
+  },
+  "schema_evolution": {
+    "columns_after": [
+      "id",
+      "price",
+      "note"
+    ],
+    "rows_with_null_note": 1
+  },
+  "schema_enforcement": {
+    "rejected": true,
+    "error": "AnalysisException: [DELTA_METADATA_MISMATCH] A metadata mismatch was detected when writing to the Delta table.",
+    "cases": {
+      "extra_column_without_mergeSchema": {
+        "rejected": true,
+        "error": "AnalysisException: [DELTA_METADATA_MISMATCH] A metadata mismatch was detected when writing to the Delta table."
+      },
+      "malformed_string_into_double": {
+        "rejected": true,
+        "error": "NumberFormatException: [CAST_INVALID_INPUT] The value 'not a number' of the type \"STRING\" cannot be cast to \"DOUBLE\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to"
+      },
+      "numeric_string_into_double": {
+        "rejected": false,
+        "stored_value": 3.25
+      }
+    }
+  },
+  "optimize": {
+    "table": "lakehouse_lab.lakehouse_bronze.yfinance_prices",
+    "files_before": 1,
+    "files_after": 1,
+    "query_seconds_before": [
+      1.732,
+      0.957,
+      0.869
+    ],
+    "query_seconds_after": [
+      0.915,
+      0.932,
+      0.81
+    ],
+    "note": "three runs each; first runs include cache warm-up",
+    "bronze_history": [
+      {
+        "version": 0,
+        "timestamp": "2026-10-10 11:44:31",
+        "user": "workspace-owner",
+        "job": "[dev narasimhamungi] lakehouse-daily",
+        "operation": "CREATE TABLE",
+        "auto": null,
+        "files_added": null,
+        "files_removed": null
+      },
+      {
+        "version": 1,
+        "timestamp": "2026-10-10 11:44:49",
+        "user": "workspace-owner",
+        "job": "[dev narasimhamungi] lakehouse-daily",
+        "operation": "STREAMING UPDATE",
+        "auto": null,
+        "files_added": "1",
+        "files_removed": "0"
+      },
+      {
+        "version": 2,
+        "timestamp": "2026-10-10 11:49:17",
+        "user": "workspace-owner",
+        "job": "[dev narasimhamungi] lakehouse-daily",
+        "operation": "SET TBLPROPERTIES",
+        "auto": null,
+        "files_added": null,
+        "files_removed": null
+      },
+      {
+        "version": 3,
+        "timestamp": "2026-10-10 11:51:28",
+        "user": "workspace-owner",
+        "job": "[dev narasimhamungi] lakehouse-daily",
+        "operation": "STREAMING UPDATE",
+        "auto": null,
+        "files_added": "1",
+        "files_removed": "0"
+      },
+      {
+        "version": 4,
+        "timestamp": "2026-10-10 11:54:31",
+        "user": "workspace-owner",
+        "job": "[dev narasimhamungi] lakehouse-daily",
+        "operation": "SET TBLPROPERTIES",
+        "auto": null,
+        "files_added": null,
+        "files_removed": null
+      },
+      {
+        "version": 5,
+        "timestamp": "2026-10-10 11:56:26",
+        "user": "workspace-owner",
+        "job": "[dev narasimhamungi] lakehouse-daily",
+        "operation": "STREAMING UPDATE",
+        "auto": null,
+        "files_added": "1",
+        "files_removed": "0"
+      },
+      {
+        "version": 6,
+        "timestamp": "2026-10-10 11:59:24",
+        "user": "workspace-owner",
+        "job": "[dev narasimhamungi] lakehouse-daily",
+        "operation": "SET TBLPROPERTIES",
+        "auto": null,
+        "files_added": null,
+        "files_removed": null
+      },
+      {
+        "version": 7,
+        "timestamp": "2026-10-10 12:21:12",
+        "user": "workspace-owner",
+        "job": "[dev narasimhamungi] lakehouse-daily",
+        "operation": "SET TBLPROPERTIES",
+        "auto": null,
+        "files_added": null,
+        "files_removed": null
+      },
+      {
+        "version": 8,
+        "timestamp": "2026-10-10 12:26:26",
+        "user": "workspace-owner",
+        "job": "[dev narasimhamungi] lakehouse-daily",
+        "operation": "SET TBLPROPERTIES",
+        "auto": null,
+        "files_added": null,
+        "files_removed": null
+      },
+      {
+        "version": 9,
+        "timestamp": "2026-10-10 13:18:07",
+        "user": "workspace-owner",
+        "job": "[dev narasimhamungi] lakehouse-delta-evidence",
+        "operation": "OPTIMIZE",
+        "auto": "false",
+        "files_added": "1",
+        "files_removed": "3"
+      },
+      {
+        "version": 10,
+        "timestamp": "2026-10-10 13:18:33",
+        "user": "workspace-owner",
+        "job": "[dev narasimhamungi] lakehouse-delta-evidence",
+        "operation": "VACUUM START",
+        "auto": null,
+        "files_added": null,
+        "files_removed": null
+      },
+      {
+        "version": 11,
+        "timestamp": "2026-10-10 13:18:34",
+        "user": "workspace-owner",
+        "job": "[dev narasimhamungi] lakehouse-delta-evidence",
+        "operation": "VACUUM END",
+        "auto": null,
+        "files_added": null,
+        "files_removed": null
+      },
+      {
+        "version": 12,
+        "timestamp": "2026-10-10 13:19:30",
+        "user": "workspace-owner",
+        "job": "[dev narasimhamungi] lakehouse-delta-evidence",
+        "operation": "VACUUM START",
+        "auto": null,
+        "files_added": null,
+        "files_removed": null
+      },
+      {
+        "version": 13,
+        "timestamp": "2026-10-10 13:19:32",
+        "user": "workspace-owner",
+        "job": "[dev narasimhamungi] lakehouse-delta-evidence",
+        "operation": "VACUUM END",
+        "auto": null,
+        "files_added": null,
+        "files_removed": null
+      },
+      {
+        "version": 14,
+        "timestamp": "2026-10-10 14:38:46",
+        "user": "workspace-owner",
+        "job": "[dev narasimhamungi] lakehouse-daily",
+        "operation": "SET TBLPROPERTIES",
+        "auto": null,
+        "files_added": null,
+        "files_removed": null
+      },
+      {
+        "version": 15,
+        "timestamp": "2026-10-10 14:42:18",
+        "user": "workspace-owner",
+        "job": "[dev narasimhamungi] lakehouse-delta-evidence",
+        "operation": "VACUUM START",
+        "auto": null,
+        "files_added": null,
+        "files_removed": null
+      },
+      {
+        "version": 16,
+        "timestamp": "2026-10-10 14:42:19",
+        "user": "workspace-owner",
+        "job": "[dev narasimhamungi] lakehouse-delta-evidence",
+        "operation": "VACUUM END",
+        "auto": null,
+        "files_added": null,
+        "files_removed": null
+      },
+      {
+        "version": 17,
+        "timestamp": "2026-10-10 15:25:02",
+        "user": "workspace-owner",
+        "job": "[dev narasimhamungi] lakehouse-delta-evidence",
+        "operation": "VACUUM START",
+        "auto": null,
+        "files_added": null,
+        "files_removed": null
+      },
+      {
+        "version": 18,
+        "timestamp": "2026-10-10 15:25:03",
+        "user": "workspace-owner",
+        "job": "[dev narasimhamungi] lakehouse-delta-evidence",
+        "operation": "VACUUM END",
+        "auto": null,
+        "files_added": null,
+        "files_removed": null
+      }
+    ],
+    "predictive_optimization": "ENABLE (inherited from METASTORE metastore_aws_us_east_2)",
+    "compaction_demo": {
+      "appends": 8,
+      "files_before": 8,
+      "files_after": 1
+    }
+  },
+  "vacuum": {
+    "retention": "default (7 days)",
+    "files_eligible": 0,
+    "note": "files replaced by OPTIMIZE are kept until the retention window passes"
+  }
+}
