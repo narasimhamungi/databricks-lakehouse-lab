@@ -118,7 +118,7 @@ Remove-Item .\m_broken.json
 
 Expected: `verify_manifest` fails once, every later task is skipped, and the failure email
 arrives. "Once" needs `disable_auto_optimization: true` on the task: serverless auto-optimization
-otherwise retries failed tasks whatever `max_retries` says (the first run of this step made two
+otherwise retries failed tasks whatever `max_retries` says (without it, this step makes two
 attempts). Evidence: `docs/screenshots/failed_run.png` and `failure_email.png`.
 
 ## 6. Delta evidence
@@ -136,7 +136,7 @@ OPTIMIZE on a scratch table with auto-compaction off, and VACUUM.
 
 - `docs_and_tags` has already applied the comments and tags. Its log lists anything that failed.
 - Open `lakehouse_lab.lakehouse_gold.fact_price_daily_consensus` in Catalog Explorer, then
-  Lineage > See lineage graph. Evidence: `docs/screenshots/lineage.png`.
+  Lineage > See lineage graph, and record the upstream and downstream counts for the README.
 
 ## 8. Optional: declarative pipeline
 

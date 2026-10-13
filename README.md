@@ -1,5 +1,7 @@
 # databricks-lakehouse-lab
 
+[![CI](https://github.com/narasimhamungi/databricks-lakehouse-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/narasimhamungi/databricks-lakehouse-lab/actions/workflows/ci.yml)
+
 The bronze/silver/gold equities pipeline from
 [marketdata-lakehouse](https://github.com/narasimhamungi/marketdata-lakehouse), rebuilt on
 PySpark, Delta Lake, Databricks Workflows and Unity Catalog. It loads a verified market-data
